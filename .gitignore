@@ -1,0 +1,42 @@
+# Secrets & local environment (NEVER COMMIT)
+.env
+.env.*
+*.env
+.env.local
+appsettings.*.local.json
+
+# Superpowers scratch workspace & internal notes
+.superpowers/
+docs/superpowers/RESUME.md
+
+# Employer assessment brief PDF (keep out of public repo)
+KeyloopCodingChallange.pdf
+
+# macOS
+.DS_Store
+
+# .NET build & test outputs
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+TestResults/
+[Bb]uild[Ll]og.*
+*.[Pp]ublish.xml
+*.user
+*.userosscache
+*.suo
+*.sln.docstates
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# IDEs
+.vs/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp

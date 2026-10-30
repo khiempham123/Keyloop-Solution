@@ -64,15 +64,15 @@ Plan §Task 2. **DoD:** `docker compose up` + 2 lệnh curl trả 2 payload **kh
 
 Plan §Task 3. **DoD:** 15 test normalizer xanh.
 
-- [ ] 15 test normalizer trước → FAIL
-- [ ] `SalesDocumentNormalizer`: KB→bytes (`*1024`), ISO date → UTC midnight, id → `sales:{id}`
-- [ ] `ServiceDocumentNormalizer`: epoch-millis → UTC, đọc `links.self` lồng, id → `service:{id}`
-- [ ] Enum lạ → `DocumentType.Unknown` nhưng **vẫn trả document** (assumption #7); thiếu title → skip document, **không throw**
-- [ ] `SalesSystemClient` / `ServiceSystemClient` implement `IDocumentSource`, bọc `try/catch` **toàn bộ** → trả `UpstreamResult.Failed`, không bao giờ throw
-- [ ] Map lỗi → reason: timeout→`Timeout`, `BrokenCircuitException`→`CircuitOpen`, non-2xx→`HttpError`, `JsonException`→`InvalidPayload`; caller cancel thì **rethrow** `OperationCanceledException`
-- [ ] `AddStandardResilienceHandler`: per-attempt **2s**, total **5s**, retry **2** lần có jitter, breaker ratio **0.5** / window **30s** / break **15s** — **mỗi upstream một pipeline riêng**
-- [ ] Retry **chỉ** transient (`5xx`, `408`, `429`, timeout, socket). **Không** retry `4xx` khác
-- [ ] Commit `feat(infrastructure): add resilient typed clients and per-source normalizers`
+- [x] 15 test normalizer trước → FAIL
+- [x] `SalesDocumentNormalizer`: KB→bytes (`*1024`), ISO date → UTC midnight, id → `sales:{id}`
+- [x] `ServiceDocumentNormalizer`: epoch-millis → UTC, đọc `links.self` lồng, id → `service:{id}`
+- [x] Enum lạ → `DocumentType.Unknown` nhưng **vẫn trả document** (assumption #7); thiếu title → skip document, **không throw**
+- [x] `SalesSystemClient` / `ServiceSystemClient` implement `IDocumentSource`, bọc `try/catch` **toàn bộ** → trả `UpstreamResult.Failed`, không bao giờ throw
+- [x] Map lỗi → reason: timeout→`Timeout`, `BrokenCircuitException`→`CircuitOpen`, non-2xx→`HttpError`, `JsonException`→`InvalidPayload`; caller cancel thì **rethrow** `OperationCanceledException`
+- [x] `AddStandardResilienceHandler`: per-attempt **2s**, total **5s**, retry **2** lần có jitter, breaker ratio **0.5** / window **30s** / break **15s** — **mỗi upstream một pipeline riêng**
+- [x] Retry **chỉ** transient (`5xx`, `408`, `429`, timeout, socket). **Không** retry `4xx` khác
+- [x] Commit `feat(infrastructure): add resilient typed clients and per-source normalizers`
 
 ## 4. Task 4 — Aggregation song song  ← trái tim của đề bài
 

@@ -21,13 +21,13 @@ Thiết kế và lý do nằm ở [docs/system-design.md](docs/system-design.md)
   - pooler (transaction mode), port `6543` → dùng cho runtime
   - Lý do phải tách: pooler không hỗ trợ session-level features mà migration cần.
   - Để trong env var `ConnectionStrings__Default` / `ConnectionStrings__Migrations`. **Không commit.**
-- [ ] **Tạo GitHub repo** → `git init`, commit 5 file hiện có, push.
-- [ ] *(tuỳ chọn)* Paste 4 dòng `export` từ [env.sh](env.sh) vào `~/.zshrc` để khỏi `source ./env.sh` mỗi lần.
-- [ ] **Đọc lại và tự xác nhận** 3 quyết định xoay cả thiết kế, trước khi code theo chúng:
+- [x] **Tạo GitHub repo** → `git init`, commit 5 file hiện có, push.
+- [x] *(tuỳ chọn)* Paste 4 dòng `export` từ [env.sh](env.sh) vào `~/.zshrc` để khỏi `source ./env.sh` mỗi lần.
+- [x] **Đọc lại và tự xác nhận** 3 quyết định xoay cả thiết kế, trước khi code theo chúng:
   - `search_audit` + `document_metadata_cache` (assumption #1 — đề **bắt buộc** có DB, mà Scenario D không sinh ra dữ liệu nào)
   - partial result trả `200` + `partial: true`, **không** `5xx` (assumption #2)
   - **không** dedupe chéo nguồn (assumption #6)
-- [ ] **Tự verify §11 design doc** (GenAI in design phase) — người chấm sẽ hỏi lại trong video. Đừng trình bày thứ chưa tự kiểm.
+- [x] **Tự verify §11 design doc** (GenAI in design phase) — người chấm sẽ hỏi lại trong video. Đừng trình bày thứ chưa tự kiểm.
 
 **Mỗi shell:** `source ./env.sh` → dotnet 9.0.320 từ `/Volumes/240GB/dotnet`.
 
@@ -37,14 +37,14 @@ Thiết kế và lý do nằm ở [docs/system-design.md](docs/system-design.md)
 
 Plan §Task 1. **DoD:** `dotnet test` xanh, 13 test VIN.
 
-- [ ] `dotnet new sln`, 4 project `src/`, 2 project `tests/`, wire project reference
-- [ ] `Directory.Build.props`: `net9.0`, nullable, `TreatWarningsAsErrors` — **khai báo `TargetFramework` đúng một lần ở đây**, không lặp trong `.csproj` nào (đây là thứ làm việc chuyển lên .NET 10 LTS chỉ còn sửa một dòng)
-- [ ] `.gitignore`, `.editorconfig`
-- [ ] Viết 13 test `VinTests` **trước** → chạy cho FAIL
-- [ ] `Vin.TryParse` (trim + upper trước khi validate), `VinError`, `SourceSystem`, `DocumentType`, `VehicleDocument`, `UpstreamResult<T>`, `UpstreamFailure`
-- [ ] Check-digit ISO 3779 (thuật toán đầy đủ trong plan Step 4)
-- [ ] `Vin.ToString()` trả về `Masked`, **không** trả raw VIN — chặn lỡ tay log PII
-- [ ] Test xanh → commit `feat(domain): add Vin value object, document model and UpstreamResult`
+- [x] `dotnet new sln`, 4 project `src/`, 2 project `tests/`, wire project reference
+- [x] `Directory.Build.props`: `net9.0`, nullable, `TreatWarningsAsErrors` — **khai báo `TargetFramework` đúng một lần ở đây**, không lặp trong `.csproj` nào (đây là thứ làm việc chuyển lên .NET 10 LTS chỉ còn sửa một dòng)
+- [x] `.gitignore`, `.editorconfig`
+- [x] Viết 13 test `VinTests` **trước** → chạy cho FAIL
+- [x] `Vin.TryParse` (trim + upper trước khi validate), `VinError`, `SourceSystem`, `DocumentType`, `VehicleDocument`, `UpstreamResult<T>`, `UpstreamFailure`
+- [x] Check-digit ISO 3779 (thuật toán đầy đủ trong plan Step 4)
+- [x] `Vin.ToString()` trả về `Masked`, **không** trả raw VIN — chặn lỡ tay log PII
+- [x] Test xanh → commit `feat(domain): add Vin value object, document model and UpstreamResult`
 
 ## 2. Task 2 — Hai mock upstream với schema khác nhau
 

@@ -1,0 +1,7 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\DocumentViewer.Domain\DocumentViewer.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

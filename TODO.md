@@ -78,16 +78,16 @@ Plan §Task 3. **DoD:** 15 test normalizer xanh.
 
 Plan §Task 4. **DoD:** 11 test xanh, trong đó test đo thời gian chứng minh gọi song song.
 
-- [ ] 11 test trước → FAIL
-- [ ] `DocumentAggregationService.GetDocumentsAsync`
-- [ ] **Không** `await Task.WhenAll(sales, service)` thẳng — mỗi source đã tự `try/catch` trả `UpstreamResult`, nên `WhenAll` không bao giờ throw. Source nào throw bất chấp contract thì bắt ở đây → `Failed(Unknown)`
-- [ ] Source `Failed` → tra cache: hit → `Stale` + dùng doc cache; miss → `Failed`
-- [ ] `Partial = true` khi có bất kỳ report nào không `Ok`
-- [ ] Sort `IssuedAt` desc, **null xuống cuối**, tie-break bằng `Id`
-- [ ] **Không bao giờ** cache kết quả fail
-- [ ] Test `Calls_sources_in_parallel_not_sequentially` — 2 source delay 400ms, tổng phải < 700ms
-- [ ] Test `A_throwing_source_does_not_lose_the_sibling_source_result`
-- [ ] Commit `feat(application): add parallel document aggregation with partial-result semantics`
+- [x] 11 test trước → FAIL
+- [x] `DocumentAggregationService.GetDocumentsAsync`
+- [x] **Không** `await Task.WhenAll(sales, service)` thẳng — mỗi source đã tự `try/catch` trả `UpstreamResult`, nên `WhenAll` không bao giờ throw. Source nào throw bất chấp contract thì bắt ở đây → `Failed(Unknown)`
+- [x] Source `Failed` → tra cache: hit → `Stale` + dùng doc cache; miss → `Failed`
+- [x] `Partial = true` khi có bất kỳ report nào không `Ok`
+- [x] Sort `IssuedAt` desc, **null xuống cuối**, tie-break bằng `Id`
+- [x] **Không bao giờ** cache kết quả fail
+- [x] Test `Calls_sources_in_parallel_not_sequentially` — 2 source delay 400ms, tổng phải < 700ms
+- [x] Test `A_throwing_source_does_not_lose_the_sibling_source_result`
+- [x] Commit `feat(application): add parallel document aggregation with partial-result semantics`
 
 ## 5. Task 5 — Endpoint + status mapping + OpenAPI  ← mốc nộp được tối thiểu
 

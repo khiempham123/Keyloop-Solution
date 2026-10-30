@@ -16,6 +16,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
 builder.Services.AddDocumentSources(builder.Configuration);
+builder.Services.AddPersistence();
 builder.Services.AddScoped<IDocumentAggregationService, DocumentAggregationService>();
 
 var app = builder.Build();

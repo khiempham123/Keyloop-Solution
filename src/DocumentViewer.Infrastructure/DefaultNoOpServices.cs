@@ -19,6 +19,12 @@ internal sealed class NullDocumentCacheRepository : IDocumentCacheRepository
         Task.CompletedTask;
 }
 
+internal sealed class NullSearchAuditRepository : ISearchAuditRepository
+{
+    public Task AppendAsync(SearchAuditEntry entry, CancellationToken ct) =>
+        Task.CompletedTask;
+}
+
 internal sealed class NullAggregationMetrics : IAggregationMetrics
 {
     public void RecordAggregation(string outcome, TimeSpan duration) { }

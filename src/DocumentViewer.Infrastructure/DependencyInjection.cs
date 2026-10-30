@@ -1,8 +1,10 @@
 using DocumentViewer.Application.Observability;
 using DocumentViewer.Application.Persistence;
 using DocumentViewer.Application.Sources;
+using DocumentViewer.Infrastructure.Persistence;
 using DocumentViewer.Infrastructure.Sources.Sales;
 using DocumentViewer.Infrastructure.Sources.Service;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -17,6 +19,7 @@ public static class DependencyInjection
     {
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IDocumentCacheRepository, NullDocumentCacheRepository>();
+        services.TryAddSingleton<ISearchAuditRepository, NullSearchAuditRepository>();
         services.TryAddSingleton<IAggregationMetrics, NullAggregationMetrics>();
 
         services.AddSingleton<IDocumentNormalizer<SalesDocumentsResponse>, SalesDocumentNormalizer>();
@@ -41,6 +44,39 @@ public static class DependencyInjection
                 client.BaseAddress = new Uri(serviceBaseAddress);
             })
             .AddStandardResilienceHandler(options => ConfigureResilience(options, minimumThroughput));
+
+        return services;
+    }
+
+    public static IServiceCollection AddPersistence(this IServiceCollection services)
+    {
+        services.TryAddSingleton(TimeProvider.System);
+
+        services.AddDbContextFactory<DocumentViewerDbContext>((sp, options) =>
+        {
+            var cs = sp.GetRequiredService<IConfiguration>().GetConnectionString("Default");
+            options.UseNpgsql(string.IsNullOrWhiteSpace(cs)
+                ? "Host=127.0.0.1;Port=5432;Database=unconfigured"
+                : cs);
+        });
+
+        services.RemoveAll<IDocumentCacheRepository>();
+        services.AddSingleton<IDocumentCacheRepository>(sp =>
+        {
+            var cs = sp.GetRequiredService<IConfiguration>().GetConnectionString("Default");
+            return string.IsNullOrWhiteSpace(cs)
+                ? new NullDocumentCacheRepository()
+                : ActivatorUtilities.CreateInstance<DocumentCacheRepository>(sp);
+        });
+
+        services.RemoveAll<ISearchAuditRepository>();
+        services.AddSingleton<ISearchAuditRepository>(sp =>
+        {
+            var cs = sp.GetRequiredService<IConfiguration>().GetConnectionString("Default");
+            return string.IsNullOrWhiteSpace(cs)
+                ? new NullSearchAuditRepository()
+                : ActivatorUtilities.CreateInstance<SearchAuditRepository>(sp);
+        });
 
         return services;
     }

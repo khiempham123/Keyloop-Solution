@@ -108,15 +108,15 @@ Plan §Task 5. **DoD:** `curl` thật qua 2 mock trả doc từ **cả hai** ngu
 
 Plan §Task 6. **DoD:** 8 test xanh, gồm test DB sập mà request vẫn `200` đủ document.
 
-- [ ] 8 test persistence trước (Testcontainers Postgres **local**, không trỏ Supabase) → FAIL
-- [ ] `DocumentViewerDbContext`, 2 entity, mapping snake_case, schema đúng design doc §8.4
-- [ ] Index `search_audit(vin, searched_at desc)` và `document_metadata_cache(expires_at)`
-- [ ] `UpsertAsync` dùng `ON CONFLICT (vin, source_system) DO UPDATE` bằng raw SQL, **không** qua change tracker → ghi đồng thời không vỡ PK
-- [ ] Documents lưu `jsonb`, TTL **15 phút**
-- [ ] **Cả hai repository tự swallow lỗi**, log `Warning`, trả `null` / im lặng — **không** để exception lọt vào đường đọc
-- [ ] Audit ghi fire-and-forget trong `try/catch` riêng
-- [ ] `dotnet ef migrations add InitialCreate` → `dotnet ef database update` qua **port 5432**; runtime chuyển sang **6543**
-- [ ] Commit `feat(persistence): add search audit and per-source document cache on Supabase`
+- [x] 8 test persistence trước (Testcontainers Postgres **local**, không trỏ Supabase) → FAIL
+- [x] `DocumentViewerDbContext`, 2 entity, mapping snake_case, schema đúng design doc §8.4
+- [x] Index `search_audit(vin, searched_at desc)` và `document_metadata_cache(expires_at)`
+- [x] `UpsertAsync` dùng `ON CONFLICT (vin, source_system) DO UPDATE` bằng raw SQL, **không** qua change tracker → ghi đồng thời không vỡ PK
+- [x] Documents lưu `jsonb`, TTL **15 phút**
+- [x] **Cả hai repository tự swallow lỗi**, log `Warning`, trả `null` / im lặng — **không** để exception lọt vào đường đọc
+- [x] Audit ghi fire-and-forget trong `try/catch` riêng
+- [x] `dotnet ef migrations add InitialCreate` → `dotnet ef database update` qua **port 5432**; runtime chuyển sang **6543**
+- [x] Commit `feat(persistence): add search audit and per-source document cache on Supabase`
 
 ## 7. Task 7 — Observability
 

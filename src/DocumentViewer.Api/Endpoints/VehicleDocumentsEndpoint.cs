@@ -1,11 +1,15 @@
+using System.Diagnostics;
 using DocumentViewer.Api.Contracts;
 using DocumentViewer.Application.Aggregation;
+using DocumentViewer.Application.Persistence;
 using DocumentViewer.Domain;
 
 namespace DocumentViewer.Api.Endpoints;
 
 public static class VehicleDocumentsEndpoint
 {
+    public const string CorrelationIdItemKey = "CorrelationId";
+
     private static readonly TimeSpan WholeRequestBudget = TimeSpan.FromSeconds(6);
 
     public static IEndpointRouteBuilder MapVehicleDocumentsEndpoint(this IEndpointRouteBuilder endpoints)
@@ -24,6 +28,8 @@ public static class VehicleDocumentsEndpoint
     private static async Task<IResult> HandleAsync(
         string vin,
         IDocumentAggregationService aggregation,
+        ISearchAuditRepository audit,
+        ILoggerFactory loggerFactory,
         HttpContext httpContext)
     {
         if (!Vin.TryParse(vin, out var parsedVin, out var vinError))
@@ -35,6 +41,7 @@ public static class VehicleDocumentsEndpoint
                 type: "https://keyloop.example/problems/invalid-vin");
         }
 
+        var startedAt = Stopwatch.GetTimestamp();
         using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(httpContext.RequestAborted);
         budgetCts.CancelAfter(WholeRequestBudget);
 
@@ -57,6 +64,18 @@ public static class VehicleDocumentsEndpoint
                 type: "https://keyloop.example/problems/request-timeout");
         }
 
+        var durationMs = (int)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+        var correlationId = ResolveCorrelationId(httpContext);
+        var auditEntry = new SearchAuditEntry(
+            Vin: result.Vin.Value,
+            CorrelationId: correlationId,
+            SearchedAt: result.RetrievedAt,
+            DurationMs: durationMs,
+            Partial: result.Partial,
+            Sources: result.Sources);
+
+        FireAndForgetAudit(audit, auditEntry, parsedVin, loggerFactory.CreateLogger("DocumentViewer.Audit"));
+
         if (result.AllSourcesFailed)
         {
             httpContext.Response.Headers.RetryAfter = "30";
@@ -68,6 +87,44 @@ public static class VehicleDocumentsEndpoint
         }
 
         return TypedResults.Ok(MapResponse(result));
+    }
+
+    private static void FireAndForgetAudit(
+        ISearchAuditRepository audit,
+        SearchAuditEntry entry,
+        Vin parsedVin,
+        ILogger logger)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await audit.AppendAsync(entry, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Background search audit task faulted for correlation {CorrelationId} and VIN {VinHash} ({VinMasked})",
+                    entry.CorrelationId,
+                    parsedVin.Hash12,
+                    parsedVin.Masked);
+            }
+        });
+    }
+
+    private static string ResolveCorrelationId(HttpContext httpContext)
+    {
+        if (httpContext.Items.TryGetValue(CorrelationIdItemKey, out var value) &&
+            value is string correlationId &&
+            !string.IsNullOrWhiteSpace(correlationId))
+        {
+            return correlationId;
+        }
+
+        return Activity.Current?.TraceId.ToString() is { Length: > 0 } traceId
+            ? traceId
+            : httpContext.TraceIdentifier;
     }
 
     private static DocumentsResponse MapResponse(AggregationResult result) =>

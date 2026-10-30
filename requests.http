@@ -1,0 +1,61 @@
+@api = http://localhost:5000
+@salesMock = http://localhost:5101
+@serviceMock = http://localhost:5102
+@validVin = 1HGCM82633A004352
+@emptyVin = WAUZZZ8V1JA003421
+
+### 1. Happy path — both upstreams healthy (200 OK, partial: false, 7 consolidated documents)
+GET {{api}}/api/v1/vehicles/{{validVin}}/documents
+Accept: application/json
+
+### 2. Valid VIN with Surrounding Whitespace & Lowercase — trimmed & upper-cased (200 OK)
+GET {{api}}/api/v1/vehicles/%201hgcm82633a004352%20/documents
+Accept: application/json
+
+### 3. Valid VIN with No Documents in Either System — empty list, NOT 404 (200 OK, documents: [])
+GET {{api}}/api/v1/vehicles/{{emptyVin}}/documents
+Accept: application/json
+
+### 4. Invalid VIN — fails ISO 3779 check-digit or character rules (400 Bad Request, ProblemDetails)
+GET {{api}}/api/v1/vehicles/1HGCM82633A0O4352/documents
+Accept: application/json
+
+### 5a. Inject Chaos Failure on Service System (503 from Service Mock)
+POST {{serviceMock}}/admin/chaos
+Content-Type: application/json
+
+{
+  "mode": "fail"
+}
+
+### 5b. Partial Failure — Sales healthy + Service down (200 OK, partial: true, Sales docs returned)
+GET {{api}}/api/v1/vehicles/{{validVin}}/documents
+Accept: application/json
+
+### 6a. Inject Chaos Failure on Sales System Too (both upstreams down)
+POST {{salesMock}}/admin/chaos
+Content-Type: application/json
+
+{
+  "mode": "fail"
+}
+
+### 6b. Both Upstreams Down & No Cache — returns 503 Service Unavailable + Retry-After: 30
+GET {{api}}/api/v1/vehicles/{{validVin}}/documents
+Accept: application/json
+
+### 7. Reset Both Upstreams Back to Normal
+POST {{salesMock}}/admin/chaos
+Content-Type: application/json
+
+{
+  "mode": "normal"
+}
+
+###
+POST {{serviceMock}}/admin/chaos
+Content-Type: application/json
+
+{
+  "mode": "normal"
+}

@@ -93,14 +93,14 @@ Plan §Task 4. **DoD:** 11 test xanh, trong đó test đo thời gian chứng mi
 
 Plan §Task 5. **DoD:** `curl` thật qua 2 mock trả doc từ **cả hai** nguồn, `partial: false`.
 
-- [ ] 9 test endpoint trước (`WebApplicationFactory`) → FAIL
-- [ ] `GET /api/v1/vehicles/{vin}/documents`, response đúng shape design doc §5.2
-- [ ] Status mapping: `200` (có data, live hoặc cache) · `200` + `documents: []` (VIN hợp lệ, không có doc — **không** 404) · `400` ProblemDetails (VIN sai) · `503` + `Retry-After: 30` (cả hai nguồn fail)
-- [ ] JSON camelCase, enum serialize ra string
-- [ ] Budget toàn request **6s** bằng linked `CancellationTokenSource`
-- [ ] Sinh + **commit `openapi.json`** (đây là client stub mà đề yêu cầu)
-- [ ] `requests.http` phủ: happy · partial · both-down · VIN sai · rỗng
-- [ ] Commit `feat(api): expose unified vehicle documents endpoint with partial-result status mapping`
+- [x] 9 test endpoint trước (`WebApplicationFactory`) → FAIL
+- [x] `GET /api/v1/vehicles/{vin}/documents`, response đúng shape design doc §5.2
+- [x] Status mapping: `200` (có data, live hoặc cache) · `200` + `documents: []` (VIN hợp lệ, không có doc — **không** 404) · `400` ProblemDetails (VIN sai) · `503` + `Retry-After: 30` (cả hai nguồn fail)
+- [x] JSON camelCase, enum serialize ra string
+- [x] Budget toàn request **6s** bằng linked `CancellationTokenSource`
+- [x] Sinh + **commit `openapi.json`** (đây là client stub mà đề yêu cầu)
+- [x] `requests.http` phủ: happy · partial · both-down · VIN sai · rỗng
+- [x] Commit `feat(api): expose unified vehicle documents endpoint with partial-result status mapping`
 
 > **🚩 Mốc cứng: hết Chủ nhật 01/11 phải tới được đây.** Chưa tới thì cắt scope ngay theo §9 bên dưới.
 

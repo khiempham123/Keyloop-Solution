@@ -3,6 +3,7 @@ using DocumentViewer.Domain;
 
 namespace DocumentViewer.Application.Aggregation;
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum SourceStatus
 {
     [JsonStringEnumMemberName("ok")]

@@ -1,0 +1,258 @@
+{
+    "openapi": "3.0.1",
+    "info": {
+        "title": "DocumentViewer.Api | v1",
+        "version": "1.0.0"
+    },
+    "servers": [
+        {
+            "url": "http://localhost:5000/"
+        }
+    ],
+    "paths": {
+        "/api/v1/vehicles/{vin}/documents": {
+            "get": {
+                "tags": [
+                    "VehicleDocumentsEndpoint"
+                ],
+                "summary": "Returns a consolidated, source-attributed document list for a vehicle by VIN.",
+                "operationId": "GetVehicleDocuments",
+                "parameters": [
+                    {
+                        "name": "vin",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/DocumentsResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/problem+json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ProblemDetails"
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "content": {
+                            "application/problem+json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ProblemDetails"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "DocumentItemResponse": {
+                "required": [
+                    "id",
+                    "sourceSystem",
+                    "documentType",
+                    "title",
+                    "issuedAt",
+                    "sizeBytes",
+                    "downloadUrl"
+                ],
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "sourceSystem": {
+                        "$ref": "#/components/schemas/SourceSystem"
+                    },
+                    "documentType": {
+                        "$ref": "#/components/schemas/DocumentType"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "issuedAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    },
+                    "sizeBytes": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true
+                    },
+                    "downloadUrl": {
+                        "type": "string",
+                        "nullable": true
+                    }
+                }
+            },
+            "DocumentsResponse": {
+                "required": [
+                    "vin",
+                    "retrievedAt",
+                    "partial",
+                    "documents",
+                    "sources"
+                ],
+                "type": "object",
+                "properties": {
+                    "vin": {
+                        "type": "string"
+                    },
+                    "retrievedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "partial": {
+                        "type": "boolean"
+                    },
+                    "documents": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/DocumentItemResponse"
+                        }
+                    },
+                    "sources": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/SourceItemResponse"
+                        }
+                    }
+                }
+            },
+            "DocumentType": {
+                "enum": [
+                    "Unknown",
+                    "PurchaseOrder",
+                    "FinanceAgreement",
+                    "RegistrationDocument",
+                    "JobCard",
+                    "InspectionReport",
+                    "WarrantyClaim"
+                ]
+            },
+            "ProblemDetails": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "title": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "status": {
+                        "type": "integer",
+                        "format": "int32",
+                        "nullable": true
+                    },
+                    "detail": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "instance": {
+                        "type": "string",
+                        "nullable": true
+                    }
+                }
+            },
+            "SourceErrorResponse": {
+                "required": [
+                    "reason",
+                    "message",
+                    "statusCode"
+                ],
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "$ref": "#/components/schemas/UpstreamFailureReason"
+                    },
+                    "message": {
+                        "type": "string"
+                    },
+                    "statusCode": {
+                        "type": "integer",
+                        "format": "int32",
+                        "nullable": true
+                    }
+                },
+                "nullable": true
+            },
+            "SourceItemResponse": {
+                "required": [
+                    "system",
+                    "status",
+                    "documentCount",
+                    "durationMs",
+                    "error"
+                ],
+                "type": "object",
+                "properties": {
+                    "system": {
+                        "$ref": "#/components/schemas/SourceSystem"
+                    },
+                    "status": {
+                        "$ref": "#/components/schemas/SourceStatus"
+                    },
+                    "documentCount": {
+                        "type": "integer",
+                        "format": "int32"
+                    },
+                    "durationMs": {
+                        "type": "integer",
+                        "format": "int64"
+                    },
+                    "error": {
+                        "$ref": "#/components/schemas/SourceErrorResponse"
+                    }
+                }
+            },
+            "SourceStatus": {
+                "enum": [
+                    "ok",
+                    "stale",
+                    "failed"
+                ]
+            },
+            "SourceSystem": {
+                "enum": [
+                    "SalesSystem",
+                    "ServiceSystem"
+                ]
+            },
+            "UpstreamFailureReason": {
+                "enum": [
+                    "Timeout",
+                    "CircuitOpen",
+                    "HttpError",
+                    "InvalidPayload",
+                    "Unknown"
+                ]
+            }
+        }
+    },
+    "tags": [
+        {
+            "name": "VehicleDocumentsEndpoint"
+        }
+    ]
+}

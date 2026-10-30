@@ -5,4 +5,8 @@
     <ProjectReference Include="..\DocumentViewer.Infrastructure\DocumentViewer.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.14" />
+  </ItemGroup>
+
 </Project>

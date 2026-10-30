@@ -1,8 +1,11 @@
+using DocumentViewer.Application.Observability;
+using DocumentViewer.Application.Persistence;
 using DocumentViewer.Application.Sources;
 using DocumentViewer.Infrastructure.Sources.Sales;
 using DocumentViewer.Infrastructure.Sources.Service;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Http.Resilience;
 using Polly;
 
@@ -12,6 +15,10 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddDocumentSources(this IServiceCollection services, IConfiguration config)
     {
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IDocumentCacheRepository, NullDocumentCacheRepository>();
+        services.TryAddSingleton<IAggregationMetrics, NullAggregationMetrics>();
+
         services.AddSingleton<IDocumentNormalizer<SalesDocumentsResponse>, SalesDocumentNormalizer>();
         services.AddSingleton<IDocumentNormalizer<ServiceDocumentsResponse>, ServiceDocumentNormalizer>();
 

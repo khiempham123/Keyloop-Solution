@@ -50,13 +50,13 @@ Plan §Task 1. **DoD:** `dotnet test` xanh, 13 test VIN.
 
 Plan §Task 2. **DoD:** `docker compose up` + 2 lệnh curl trả 2 payload **khác shape**; chaos `fail` trả 503.
 
-- [ ] `mocks/MockSalesApi` — `GET /sales/vehicles/{vin}/documents`, port `5101`
-- [ ] `mocks/MockServiceApi` — `GET /service/v2/vehicles/{vin}/docs`, port `5102`
-- [ ] **Schema phải lệch thật** (bảng đối chiếu ở design doc §5.3): `documentId` string vs `id` int; `createdDate` ISO vs `timestamp` epoch-millis; `fileSizeKb` KB vs `bytes`; `url` phẳng vs `links.self` lồng; envelope `{documents}` vs `{data:{items},meta}`
-- [ ] Seed ≥4 doc cho `1HGCM82633A004352`, rỗng cho `WAUZZZ8V7JA003421`, và **một `category` lạ** để test mapping → `Unknown`
-- [ ] `POST /admin/chaos` với `mode: normal|slow|fail|garbage` — `garbage` trả 200 kèm payload thiếu field
-- [ ] `docker-compose.yml` (chỉ 2 mock; DB là Supabase)
-- [ ] Commit `feat(mocks): add Sales and Service mock APIs with divergent schemas and chaos injection`
+- [x] `mocks/MockSalesApi` — `GET /sales/vehicles/{vin}/documents`, port `5101`
+- [x] `mocks/MockServiceApi` — `GET /service/v2/vehicles/{vin}/docs`, port `5102`
+- [x] **Schema phải lệch thật** (bảng đối chiếu ở design doc §5.3): `documentId` string vs `id` int; `createdDate` ISO vs `timestamp` epoch-millis; `fileSizeKb` KB vs `bytes`; `url` phẳng vs `links.self` lồng; envelope `{documents}` vs `{data:{items},meta}`
+- [x] Seed ≥4 doc cho `1HGCM82633A004352`, rỗng cho `WAUZZZ8V7JA003421`, và **một `category` lạ** để test mapping → `Unknown`
+- [x] `POST /admin/chaos` với `mode: normal|slow|fail|garbage` — `garbage` trả 200 kèm payload thiếu field
+- [x] `docker-compose.yml` (chỉ 2 mock; DB là Supabase)
+- [x] Commit `feat(mocks): add Sales and Service mock APIs with divergent schemas and chaos injection`
 
 > Chaos endpoint là 30 giây ấn tượng nhất của video: bật `fail` ngay trên camera rồi show response `partial: true`.
 

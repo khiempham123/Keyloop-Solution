@@ -1,0 +1,14 @@
+**/.git
+**/.vs
+**/.idea
+**/.vscode
+**/bin
+**/obj
+**/TestResults
+.env
+.env.*
+*.env
+.superpowers
+docs
+tests
+*.pdf

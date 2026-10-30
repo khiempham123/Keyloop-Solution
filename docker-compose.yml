@@ -1,0 +1,16 @@
+services:
+  mock-sales-api:
+    build:
+      context: .
+      dockerfile: mocks/MockSalesApi/Dockerfile
+    ports:
+      - "5101:8080"
+    restart: unless-stopped
+
+  mock-service-api:
+    build:
+      context: .
+      dockerfile: mocks/MockServiceApi/Dockerfile
+    ports:
+      - "5102:8080"
+    restart: unless-stopped

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json;
+using DocumentViewer.Application.Observability;
 using DocumentViewer.Application.Sources;
 using DocumentViewer.Domain;
 using Microsoft.Extensions.Logging;
@@ -25,6 +26,12 @@ internal static class UpstreamClientExecutor
         ILogger logger,
         CancellationToken ct)
     {
+        using var activity = DocumentViewerTelemetry.ActivitySource.StartActivity(
+            $"upstream.fetch {system}",
+            ActivityKind.Client);
+        activity?.SetTag("upstream.system", system.ToString());
+        activity?.SetTag("vehicle.vin_hash", vin.Hash12);
+
         var startedAt = Stopwatch.GetTimestamp();
 
         try
@@ -35,6 +42,10 @@ internal static class UpstreamClientExecutor
             if (!response.IsSuccessStatusCode)
             {
                 var statusCode = (int)response.StatusCode;
+                activity?.SetTag("http.response.status_code", statusCode);
+                activity?.SetTag("upstream.status", "failed");
+                activity?.SetTag("upstream.failure_reason", UpstreamFailureReason.HttpError.ToString());
+
                 logger.LogWarning(
                     "Upstream {SourceSystem} returned HTTP {StatusCode} for VIN {VinHash} ({VinMasked}) in {DurationMs}ms",
                     system,
@@ -56,6 +67,9 @@ internal static class UpstreamClientExecutor
 
             if (payload is null)
             {
+                activity?.SetTag("upstream.status", "failed");
+                activity?.SetTag("upstream.failure_reason", UpstreamFailureReason.InvalidPayload.ToString());
+
                 logger.LogWarning(
                     "Upstream {SourceSystem} returned null JSON payload for VIN {VinHash} ({VinMasked})",
                     system,
@@ -71,31 +85,38 @@ internal static class UpstreamClientExecutor
             }
 
             var documents = normalizer.Normalize(payload);
+            activity?.SetTag("http.response.status_code", (int)response.StatusCode);
+            activity?.SetTag("upstream.status", "ok");
+            activity?.SetTag("upstream.document_count", documents.Count);
+            activity?.SetStatus(ActivityStatusCode.Ok);
+
             return new UpstreamResult<IReadOnlyList<VehicleDocument>>.Ok(documents, elapsed);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            activity?.SetTag("upstream.status", "cancelled");
             throw;
         }
         catch (TimeoutRejectedException ex)
         {
-            return Fail(system, vin, startedAt, UpstreamFailureReason.Timeout, ex.Message, null, logger);
+            return Fail(activity, system, vin, startedAt, UpstreamFailureReason.Timeout, ex.Message, null, logger);
         }
         catch (TaskCanceledException ex)
         {
-            return Fail(system, vin, startedAt, UpstreamFailureReason.Timeout, ex.Message, null, logger);
+            return Fail(activity, system, vin, startedAt, UpstreamFailureReason.Timeout, ex.Message, null, logger);
         }
         catch (BrokenCircuitException ex)
         {
-            return Fail(system, vin, startedAt, UpstreamFailureReason.CircuitOpen, ex.Message, null, logger);
+            return Fail(activity, system, vin, startedAt, UpstreamFailureReason.CircuitOpen, ex.Message, null, logger);
         }
         catch (JsonException ex)
         {
-            return Fail(system, vin, startedAt, UpstreamFailureReason.InvalidPayload, ex.Message, null, logger);
+            return Fail(activity, system, vin, startedAt, UpstreamFailureReason.InvalidPayload, ex.Message, null, logger);
         }
         catch (HttpRequestException ex)
         {
             return Fail(
+                activity,
                 system,
                 vin,
                 startedAt,
@@ -106,11 +127,12 @@ internal static class UpstreamClientExecutor
         }
         catch (Exception ex)
         {
-            return Fail(system, vin, startedAt, UpstreamFailureReason.Unknown, ex.Message, null, logger);
+            return Fail(activity, system, vin, startedAt, UpstreamFailureReason.Unknown, ex.Message, null, logger);
         }
     }
 
     private static UpstreamResult<IReadOnlyList<VehicleDocument>>.Failed Fail(
+        Activity? activity,
         SourceSystem system,
         Vin vin,
         long startedAt,
@@ -120,6 +142,13 @@ internal static class UpstreamClientExecutor
         ILogger logger)
     {
         var elapsed = Stopwatch.GetElapsedTime(startedAt);
+        activity?.SetTag("upstream.status", "failed");
+        activity?.SetTag("upstream.failure_reason", reason.ToString());
+        if (statusCode.HasValue)
+        {
+            activity?.SetTag("http.response.status_code", statusCode.Value);
+        }
+
         logger.LogWarning(
             "Upstream {SourceSystem} degraded ({Reason}) for VIN {VinHash} ({VinMasked}) after {DurationMs}ms: {Message}",
             system,

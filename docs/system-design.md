@@ -351,6 +351,8 @@ One `ActivitySource` per layer. A single request produces a parent span with two
 available proof that requirement #2 is actually met, and a screenshot of it belongs in
 the submission.
 
+![Parallel upstream fan-out trace waterfall](images/trace-parallel-fanout.png)
+
 ### 7.4 Health checks
 
 | Endpoint | Checks | Used by |

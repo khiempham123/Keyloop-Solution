@@ -1,10 +1,15 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DocumentViewer.Api.Endpoints;
+using DocumentViewer.Api.Middleware;
+using DocumentViewer.Api.Observability;
 using DocumentViewer.Application.Aggregation;
 using DocumentViewer.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.AddObservabilityLogging();
+builder.AddObservabilityTelemetry();
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
@@ -17,14 +22,18 @@ builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
 builder.Services.AddDocumentSources(builder.Configuration);
 builder.Services.AddPersistence();
+builder.Services.AddDocumentViewerHealthChecks();
 builder.Services.AddScoped<IDocumentAggregationService, DocumentAggregationService>();
 
 var app = builder.Build();
 
+app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseDocumentViewerRequestLogging();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
 app.MapOpenApi();
+app.MapDocumentViewerHealthChecks();
 app.MapVehicleDocumentsEndpoint();
 
 app.Run();

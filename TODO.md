@@ -122,17 +122,17 @@ Plan §Task 6. **DoD:** 8 test xanh, gồm test DB sập mà request vẫn `200`
 
 Plan §Task 7. **DoD:** 9 test xanh + có screenshot trace 2 span song song.
 
-- [ ] 9 test trước → FAIL
-- [ ] Serilog JSON ra stdout, enrich `CorrelationId` / `TraceId` / `VinHash`
-- [ ] `CorrelationIdMiddleware`: ưu tiên `traceparent` → `X-Correlation-Id` → tự sinh; echo lại trên response
-- [ ] `CorrelationPropagationHandler` gắn vào **cả hai** typed client
-- [ ] **Không log line nào chứa VIN thô** — chỉ `VinHash` (12 hex đầu SHA-256) + 6 ký tự cuối. VIN đầy đủ chỉ nằm trong bảng `search_audit`
-- [ ] OpenTelemetry: tracing (ASP.NET Core + HttpClient + Npgsql), 1 span con/upstream; metrics đúng 6 instrument ở design doc §7.2; OTLP khi có `OTEL_EXPORTER_OTLP_ENDPOINT`, không thì console
-- [ ] Health: `/health/live` (self) · `/health/ready` (**chỉ DB**) · `/health/upstream` (informational, luôn 200)
-- [ ] Level: upstream timeout là `Warning`, **không** `Error` — page on-call vì upstream chậm là cách huấn luyện người ta bỏ qua alert
-- [ ] Client disconnect: không log `Error`, không ghi audit, không tính là upstream failure
-- [ ] **Screenshot trace waterfall** 2 span song song → `docs/images/trace-parallel-fanout.png`, link vào design doc §7.3
-- [ ] Commit `feat(observability): add correlation ids, structured logging, OpenTelemetry and health checks`
+- [x] 9 test trước → FAIL
+- [x] Serilog JSON ra stdout, enrich `CorrelationId` / `TraceId` / `VinHash`
+- [x] `CorrelationIdMiddleware`: ưu tiên `traceparent` → `X-Correlation-Id` → tự sinh; echo lại trên response
+- [x] `CorrelationPropagationHandler` gắn vào **cả hai** typed client
+- [x] **Không log line nào chứa VIN thô** — chỉ `VinHash` (12 hex đầu SHA-256) + 6 ký tự cuối. VIN đầy đủ chỉ nằm trong bảng `search_audit`
+- [x] OpenTelemetry: tracing (ASP.NET Core + HttpClient + Npgsql), 1 span con/upstream; metrics đúng 6 instrument ở design doc §7.2; OTLP khi có `OTEL_EXPORTER_OTLP_ENDPOINT`, không thì console
+- [x] Health: `/health/live` (self) · `/health/ready` (**chỉ DB**) · `/health/upstream` (informational, luôn 200)
+- [x] Level: upstream timeout là `Warning`, **không** `Error` — page on-call vì upstream chậm là cách huấn luyện người ta bỏ qua alert
+- [x] Client disconnect: không log `Error`, không ghi audit, không tính là upstream failure
+- [x] **Screenshot trace waterfall** 2 span song song → `docs/images/trace-parallel-fanout.png`, link vào design doc §7.3
+- [x] Commit `feat(observability): add correlation ids, structured logging, OpenTelemetry and health checks`
 
 ## 8. Task 8 — Test resilience với upstream dàn dựng
 

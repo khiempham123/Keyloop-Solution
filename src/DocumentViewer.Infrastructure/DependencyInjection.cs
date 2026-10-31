@@ -1,6 +1,8 @@
 using DocumentViewer.Application.Observability;
 using DocumentViewer.Application.Persistence;
 using DocumentViewer.Application.Sources;
+using DocumentViewer.Domain;
+using DocumentViewer.Infrastructure.Observability;
 using DocumentViewer.Infrastructure.Persistence;
 using DocumentViewer.Infrastructure.Sources.Sales;
 using DocumentViewer.Infrastructure.Sources.Service;
@@ -20,7 +22,10 @@ public static class DependencyInjection
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IDocumentCacheRepository, NullDocumentCacheRepository>();
         services.TryAddSingleton<ISearchAuditRepository, NullSearchAuditRepository>();
-        services.TryAddSingleton<IAggregationMetrics, NullAggregationMetrics>();
+        services.AddSingleton<AggregationMetrics>();
+        services.RemoveAll<IAggregationMetrics>();
+        services.AddSingleton<IAggregationMetrics>(static sp => sp.GetRequiredService<AggregationMetrics>());
+        services.AddTransient<CorrelationPropagationHandler>();
 
         services.AddSingleton<IDocumentNormalizer<SalesDocumentsResponse>, SalesDocumentNormalizer>();
         services.AddSingleton<IDocumentNormalizer<ServiceDocumentsResponse>, ServiceDocumentNormalizer>();
@@ -36,14 +41,26 @@ public static class DependencyInjection
             {
                 client.BaseAddress = new Uri(salesBaseAddress);
             })
-            .AddStandardResilienceHandler(options => ConfigureResilience(options, minimumThroughput));
+            .AddHttpMessageHandler<CorrelationPropagationHandler>()
+            .AddStandardResilienceHandler()
+            .Configure((options, sp) => ConfigureResilience(
+                options,
+                minimumThroughput,
+                SourceSystem.SalesSystem,
+                sp.GetRequiredService<AggregationMetrics>()));
 
         services
             .AddHttpClient<IDocumentSource, ServiceSystemClient>("ServiceSystem", client =>
             {
                 client.BaseAddress = new Uri(serviceBaseAddress);
             })
-            .AddStandardResilienceHandler(options => ConfigureResilience(options, minimumThroughput));
+            .AddHttpMessageHandler<CorrelationPropagationHandler>()
+            .AddStandardResilienceHandler()
+            .Configure((options, sp) => ConfigureResilience(
+                options,
+                minimumThroughput,
+                SourceSystem.ServiceSystem,
+                sp.GetRequiredService<AggregationMetrics>()));
 
         return services;
     }
@@ -81,7 +98,11 @@ public static class DependencyInjection
         return services;
     }
 
-    private static void ConfigureResilience(HttpStandardResilienceOptions options, int minimumThroughput)
+    private static void ConfigureResilience(
+        HttpStandardResilienceOptions options,
+        int minimumThroughput,
+        SourceSystem system,
+        AggregationMetrics metrics)
     {
         options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(2);
         options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(5);
@@ -99,5 +120,20 @@ public static class DependencyInjection
         options.CircuitBreaker.MinimumThroughput = minimumThroughput;
         options.CircuitBreaker.ShouldHandle = static args =>
             ValueTask.FromResult(HttpClientResiliencePredicates.IsTransient(args.Outcome));
+        options.CircuitBreaker.OnOpened = _ =>
+        {
+            metrics.SetCircuitState(system, 1);
+            return ValueTask.CompletedTask;
+        };
+        options.CircuitBreaker.OnClosed = _ =>
+        {
+            metrics.SetCircuitState(system, 0);
+            return ValueTask.CompletedTask;
+        };
+        options.CircuitBreaker.OnHalfOpened = _ =>
+        {
+            metrics.SetCircuitState(system, 2);
+            return ValueTask.CompletedTask;
+        };
     }
 }

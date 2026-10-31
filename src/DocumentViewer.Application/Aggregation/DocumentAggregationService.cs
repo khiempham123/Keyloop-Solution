@@ -31,6 +31,7 @@ public sealed class DocumentAggregationService(
 
         var mergedDocuments = new List<VehicleDocument>();
         var reports = new List<SourceReport>(outcomes.Length);
+        var cacheUpsertTasks = new List<Task>(outcomes.Length);
 
         foreach (var (system, outcome) in outcomes)
         {
@@ -46,7 +47,7 @@ public sealed class DocumentAggregationService(
                         Error: null));
 
                     metrics.RecordUpstream(system, SourceStatus.Ok, ok.Duration);
-                    await TryCacheUpsertAsync(vin, system, ok.Value, ct);
+                    cacheUpsertTasks.Add(TryCacheUpsertAsync(vin, system, ok.Value, ct));
                     break;
 
                 case UpstreamResult<IReadOnlyList<VehicleDocument>>.Failed failed:
@@ -76,6 +77,11 @@ public sealed class DocumentAggregationService(
                     }
                     break;
             }
+        }
+
+        if (cacheUpsertTasks.Count > 0)
+        {
+            await Task.WhenAll(cacheUpsertTasks);
         }
 
         var orderedDocuments = mergedDocuments

@@ -96,6 +96,22 @@ public static class HealthChecks
         string Status,
         IReadOnlyDictionary<string, string> Sources);
 
+    /// <summary>
+    /// How long readiness waits for PostgreSQL. Configurable because the right value
+    /// depends on where the database is: a local instance answers in under a
+    /// millisecond, while a cold cross-region managed pooler needs seconds for its
+    /// TLS + tenant-lookup + SASL handshake. A hardcoded 2s silently failed readiness
+    /// against live Supabase.
+    /// </summary>
+    private const int DefaultReadinessBudgetMs = 5_000;
+
+    private static TimeSpan ReadinessBudget(IConfiguration configuration)
+    {
+        var configured = configuration.GetValue<int?>("HealthChecks:DatabaseTimeoutMs");
+        return TimeSpan.FromMilliseconds(
+            configured is > 0 ? configured.Value : DefaultReadinessBudgetMs);
+    }
+
     private sealed class PostgresReadinessHealthCheck(
         IDbContextFactory<DocumentViewerDbContext> dbFactory,
         IConfiguration configuration) : IHealthCheck
@@ -110,13 +126,33 @@ public static class HealthChecks
                 return HealthCheckResult.Unhealthy("Database connection string is not configured.");
             }
 
+            var budget = ReadinessBudget(configuration);
+
+            // Npgsql does not reliably observe a cancellation token while it is still
+            // opening a physical connection, so the budget is enforced by racing the
+            // probe rather than by cancelling it. Found against live Supabase: a short
+            // budget was ignored and readiness ran for the full connect timeout.
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var probe = ProbeAsync(cts.Token);
+            var finished = await Task.WhenAny(probe, Task.Delay(budget, cancellationToken));
+
+            if (finished != probe)
+            {
+                cts.Cancel();
+                Forget(probe);
+                return HealthCheckResult.Unhealthy(
+                    $"PostgreSQL did not answer within {budget.TotalMilliseconds:F0}ms.");
+            }
+
+            return await probe;
+        }
+
+        private async Task<HealthCheckResult> ProbeAsync(CancellationToken ct)
+        {
             try
             {
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(TimeSpan.FromSeconds(2));
-
-                await using var db = await dbFactory.CreateDbContextAsync(cts.Token);
-                var canConnect = await db.Database.CanConnectAsync(cts.Token);
+                await using var db = await dbFactory.CreateDbContextAsync(ct);
+                var canConnect = await db.Database.CanConnectAsync(ct);
                 return canConnect
                     ? HealthCheckResult.Healthy("PostgreSQL is reachable.")
                     : HealthCheckResult.Unhealthy("PostgreSQL failed readiness check.");
@@ -126,5 +162,8 @@ public static class HealthChecks
                 return HealthCheckResult.Unhealthy("PostgreSQL is unreachable.", ex);
             }
         }
+
+        private static void Forget(Task task) =>
+            task.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
     }
 }

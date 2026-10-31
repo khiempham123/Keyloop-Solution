@@ -176,6 +176,73 @@ public sealed class DocumentAggregationServiceTests
         result.AllSourcesFailed.ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task Cache_writes_outlive_the_request_and_never_hold_the_response()
+    {
+        // Found against live Supabase: cache writes ran on the request's cancellation
+        // token, which is cancelled the moment the response is sent. A cross-region
+        // write never finished, so nothing was ever cached and the stale fallback in
+        // spec §4.3 could not work. A slow write must therefore (a) not hold the read
+        // and (b) still complete after the request token is cancelled.
+        var cache = new SlowWriteCache(TimeSpan.FromSeconds(2));
+        var sales = Source(SourceSystem.SalesSystem, Docs(SourceSystem.SalesSystem, 2));
+        using var requestCts = new CancellationTokenSource();
+
+        var sw = Stopwatch.StartNew();
+        await ServiceWithCache(cache, sales).GetDocumentsAsync(TestVin, requestCts.Token);
+        sw.Stop();
+
+        sw.Elapsed.ShouldBeLessThan(
+            TimeSpan.FromMilliseconds(1800),
+            "a slow cache write must not be awaited on the response path");
+
+        await requestCts.CancelAsync();
+
+        await cache.Finished;
+        cache.CompletedWrites.ShouldBe(1);
+        cache.ObservedCancellation.ShouldBeFalse(
+            "cache writes must not observe the request's cancellation token");
+    }
+
+    private sealed class SlowWriteCache(TimeSpan writeDuration) : IDocumentCacheRepository
+    {
+        private readonly TaskCompletionSource finished =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private int completedWrites;
+
+        public Task Finished => finished.Task;
+
+        public int CompletedWrites => Volatile.Read(ref completedWrites);
+
+        public bool ObservedCancellation { get; private set; }
+
+        public Task<CachedSourceDocuments?> GetAsync(Vin vin, SourceSystem system, CancellationToken ct) =>
+            Task.FromResult<CachedSourceDocuments?>(null);
+
+        public async Task UpsertAsync(
+            Vin vin,
+            SourceSystem system,
+            IReadOnlyList<VehicleDocument> documents,
+            TimeSpan ttl,
+            CancellationToken ct)
+        {
+            try
+            {
+                await Task.Delay(writeDuration, ct);
+                Interlocked.Increment(ref completedWrites);
+            }
+            catch (OperationCanceledException)
+            {
+                ObservedCancellation = true;
+            }
+            finally
+            {
+                finished.TrySetResult();
+            }
+        }
+    }
+
     private static DocumentAggregationService Service(params IDocumentSource[] sources) =>
         ServiceWithCache(new NoOpCache(), sources);
 

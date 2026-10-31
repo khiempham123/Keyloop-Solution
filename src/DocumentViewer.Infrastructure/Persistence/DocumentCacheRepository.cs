@@ -11,13 +11,25 @@ public sealed class DocumentCacheRepository(
     TimeProvider clock,
     ILogger<DocumentCacheRepository> logger) : IDocumentCacheRepository
 {
-    private static readonly TimeSpan OperationTimeout = TimeSpan.FromMilliseconds(1500);
+    /// <summary>
+    /// A read sits on the response path, so it gets a short budget and a cache miss is
+    /// an acceptable outcome.
+    /// </summary>
+    private static readonly TimeSpan ReadTimeout = TimeSpan.FromMilliseconds(1500);
+
+    /// <summary>
+    /// A write happens after the response has been sent, so it gets room for a cold
+    /// cross-region connection. 1500ms was too tight for a managed pooler's
+    /// TLS + tenant-lookup + SASL handshake, which meant the cache stayed permanently
+    /// empty and the stale fallback never worked.
+    /// </summary>
+    private static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(8);
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
     public async Task<CachedSourceDocuments?> GetAsync(Vin vin, SourceSystem system, CancellationToken ct)
     {
         using var dbCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        dbCts.CancelAfter(OperationTimeout);
+        dbCts.CancelAfter(ReadTimeout);
 
         try
         {
@@ -62,7 +74,7 @@ public sealed class DocumentCacheRepository(
         CancellationToken ct)
     {
         using var dbCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        dbCts.CancelAfter(OperationTimeout);
+        dbCts.CancelAfter(WriteTimeout);
 
         try
         {

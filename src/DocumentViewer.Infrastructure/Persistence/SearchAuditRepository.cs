@@ -11,7 +11,11 @@ public sealed class SearchAuditRepository(
     IDbContextFactory<DocumentViewerDbContext> dbFactory,
     ILogger<SearchAuditRepository> logger) : ISearchAuditRepository
 {
-    private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(3);
+    /// <summary>
+    /// The audit write is fire-and-forget after the response, so it gets room for a
+    /// cold cross-region connection rather than being dropped on a slow handshake.
+    /// </summary>
+    private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(8);
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
     public async Task AppendAsync(SearchAuditEntry entry, CancellationToken ct)

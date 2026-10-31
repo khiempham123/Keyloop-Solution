@@ -74,8 +74,13 @@ public static class DependencyInjection
             var cs = sp.GetRequiredService<IConfiguration>().GetConnectionString("Default");
             options.UseNpgsql(string.IsNullOrWhiteSpace(cs)
                 ? "Host=127.0.0.1;Port=5432;Database=unconfigured"
-                : cs);
+                // Keeps one connection warm so no request pays the cold cross-region
+                // handshake. See NpgsqlConnectionHardening.
+                : NpgsqlConnectionHardening.Harden(cs));
         });
+
+        // Warms the pool after startup; never blocks boot, never throws.
+        services.AddHostedService<DatabaseWarmupService>();
 
         services.RemoveAll<IDocumentCacheRepository>();
         services.AddSingleton<IDocumentCacheRepository>(sp =>

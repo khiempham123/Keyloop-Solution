@@ -16,6 +16,12 @@ public sealed class DocumentAggregationService(
 {
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(15);
 
+    /// <summary>
+    /// How long the response path is willing to wait for the cache. Beyond this the
+    /// read completes and the cache operation is left to finish on its own.
+    /// </summary>
+    private static readonly TimeSpan CacheOperationBudget = TimeSpan.FromSeconds(1);
+
     public async Task<AggregationResult> GetDocumentsAsync(Vin vin, CancellationToken ct)
     {
         var startedAt = Stopwatch.GetTimestamp();
@@ -47,11 +53,11 @@ public sealed class DocumentAggregationService(
                         Error: null));
 
                     metrics.RecordUpstream(system, SourceStatus.Ok, ok.Duration);
-                    cacheUpsertTasks.Add(TryCacheUpsertAsync(vin, system, ok.Value, ct));
+                    cacheUpsertTasks.Add(TryCacheUpsertAsync(vin, system, ok.Value));
                     break;
 
                 case UpstreamResult<IReadOnlyList<VehicleDocument>>.Failed failed:
-                    var cached = await TryCacheGetAsync(vin, system, ct);
+                    var cached = await TryCacheGetWithinBudgetAsync(vin, system, ct);
                     if (cached is not null)
                     {
                         mergedDocuments.AddRange(cached.Documents);
@@ -81,7 +87,20 @@ public sealed class DocumentAggregationService(
 
         if (cacheUpsertTasks.Count > 0)
         {
-            await Task.WhenAll(cacheUpsertTasks);
+            // Cache writes are an optimisation, never a reason to make a user wait. A
+            // database that accepts the connection and then never answers used to hold
+            // the whole read until the request budget expired.
+            var writes = Task.WhenAll(cacheUpsertTasks);
+            if (await Task.WhenAny(writes, Task.Delay(CacheOperationBudget)) != writes)
+            {
+                logger.LogWarning(
+                    "Cache writes for VIN {VinHash} ({VinMasked}) exceeded {BudgetMs}ms; "
+                    + "completing the read without waiting for them",
+                    vin.Hash12,
+                    vin.Masked,
+                    CacheOperationBudget.TotalMilliseconds);
+                Forget(writes);
+            }
         }
 
         var orderedDocuments = mergedDocuments
@@ -146,6 +165,31 @@ public sealed class DocumentAggregationService(
         }
     }
 
+    private async Task<CachedSourceDocuments?> TryCacheGetWithinBudgetAsync(
+        Vin vin,
+        SourceSystem system,
+        CancellationToken ct)
+    {
+        var lookup = TryCacheGetAsync(vin, system, ct);
+        if (await Task.WhenAny(lookup, Task.Delay(CacheOperationBudget)) != lookup)
+        {
+            logger.LogWarning(
+                "Cache lookup for source {SourceSystem} and VIN {VinHash} ({VinMasked}) exceeded "
+                + "{BudgetMs}ms; treating as a cache miss",
+                system,
+                vin.Hash12,
+                vin.Masked,
+                CacheOperationBudget.TotalMilliseconds);
+            Forget(lookup);
+            return null;
+        }
+
+        return await lookup;
+    }
+
+    private static void Forget(Task task) =>
+        task.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
+
     private async Task<CachedSourceDocuments?> TryCacheGetAsync(Vin vin, SourceSystem system, CancellationToken ct)
     {
         try
@@ -171,19 +215,21 @@ public sealed class DocumentAggregationService(
         }
     }
 
+    /// <summary>
+    /// Writes the cache deliberately WITHOUT the request's cancellation token. That
+    /// token is cancelled the moment the response is sent, and a cross-region write
+    /// takes longer than the request's remaining lifetime — so passing it meant nothing
+    /// was ever cached and the stale fallback in spec §4.3 could never trigger. The
+    /// repository applies its own write budget.
+    /// </summary>
     private async Task TryCacheUpsertAsync(
         Vin vin,
         SourceSystem system,
-        IReadOnlyList<VehicleDocument> documents,
-        CancellationToken ct)
+        IReadOnlyList<VehicleDocument> documents)
     {
         try
         {
-            await cache.UpsertAsync(vin, system, documents, CacheTtl, ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
+            await cache.UpsertAsync(vin, system, documents, CacheTtl, CancellationToken.None);
         }
         catch (Exception ex)
         {

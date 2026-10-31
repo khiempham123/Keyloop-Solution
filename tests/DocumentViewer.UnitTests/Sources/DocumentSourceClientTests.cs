@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using DocumentViewer.Application.Sources;
@@ -159,6 +160,165 @@ public sealed class DocumentSourceClientTests
         var sources = provider.GetServices<IDocumentSource>().ToList();
 
         sources.Select(s => s.System).ShouldBe([SourceSystem.SalesSystem, SourceSystem.ServiceSystem], ignoreOrder: true);
+    }
+
+    [Fact]
+    public async Task Reports_a_body_that_declares_an_absurd_length_as_an_invalid_payload()
+    {
+        // Spec §2 principle 3: upstreams are untrusted. An unbounded body read is the one
+        // place they were trusted — an upstream streaming without end could grow this
+        // process until it took the healthy source down with it.
+        var client = CreateSalesClient(_ =>
+        {
+            var content = new StreamContent(new MemoryStream("{}"u8.ToArray()));
+            content.Headers.ContentLength = 64L * 1024 * 1024;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        });
+
+        var result = await client.FetchAsync(TestVin, CancellationToken.None);
+
+        var failed = result.ShouldBeOfType<UpstreamResult<IReadOnlyList<VehicleDocument>>.Failed>();
+        failed.Failure.Reason.ShouldBe(UpstreamFailureReason.InvalidPayload);
+    }
+
+    [Fact]
+    public async Task Reports_a_body_that_never_stops_arriving_as_an_invalid_payload()
+    {
+        // No Content-Length at all, so the cap has to be enforced while reading.
+        var client = CreateSalesClient(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new EndlessWhitespaceStream())
+        });
+
+        var result = await client.FetchAsync(TestVin, CancellationToken.None);
+
+        var failed = result.ShouldBeOfType<UpstreamResult<IReadOnlyList<VehicleDocument>>.Failed>();
+        failed.Failure.Reason.ShouldBe(UpstreamFailureReason.InvalidPayload);
+    }
+
+    [Fact]
+    public async Task Reports_a_body_that_trickles_past_its_budget_as_a_timeout()
+    {
+        // The resilience pipeline returns at the response headers
+        // (HttpCompletionOption.ResponseHeadersRead), so the body read happens outside
+        // the per-upstream budget entirely and needs a budget of its own. Without one, a
+        // trickled body is bounded only by the whole-request timeout — and taking that
+        // long is the condition under which a healthy source's documents used to be lost.
+        var client = CreateSalesClient(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new StallingStream())
+        });
+
+        var sw = Stopwatch.StartNew();
+        var result = await client.FetchAsync(TestVin, CancellationToken.None);
+        sw.Stop();
+
+        var failed = result.ShouldBeOfType<UpstreamResult<IReadOnlyList<VehicleDocument>>.Failed>();
+        failed.Failure.Reason.ShouldBe(UpstreamFailureReason.Timeout);
+        sw.Elapsed.ShouldBeLessThan(
+            TimeSpan.FromSeconds(4),
+            "the body read must be bounded by its own budget, not by the caller's");
+    }
+
+    [Fact]
+    public async Task A_body_just_under_the_cap_is_still_read_normally()
+    {
+        var padding = new string(' ', 1024 * 1024);
+        var json = $$"""{"documents":[{"documentId":"PO-1","docType":"PURCHASE_ORDER","description":"Purchase order PO-1","createdDate":"2026-03-04","fileSizeKb":145,"url":null}]{{padding}}}""";
+
+        var client = CreateSalesClient(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        });
+
+        var result = await client.FetchAsync(TestVin, CancellationToken.None);
+
+        result.ShouldBeOfType<UpstreamResult<IReadOnlyList<VehicleDocument>>.Ok>()
+            .Value.ShouldHaveSingleItem().Id.ShouldBe("sales:PO-1");
+    }
+
+    /// <summary>Hands out whitespace for ever: valid JSON so far, and never finished.</summary>
+    private sealed class EndlessWhitespaceStream : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            Array.Fill(buffer, (byte)' ', offset, count);
+            return count;
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            buffer.Span.Fill((byte)' ');
+            return ValueTask.FromResult(buffer.Length);
+        }
+
+        public override void Flush() { }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>Sends one byte, then stalls for ever.</summary>
+    private sealed class StallingStream : Stream
+    {
+        private bool sentFirstByte;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (!sentFirstByte)
+            {
+                sentFirstByte = true;
+                buffer.Span[0] = (byte)'{';
+                return 1;
+            }
+
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
+
+        public override void Flush() { }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private static SalesSystemClient CreateSalesClient(Func<HttpRequestMessage, HttpResponseMessage> handler)

@@ -17,6 +17,20 @@ internal static class UpstreamClientExecutor
         PropertyNameCaseInsensitive = true
     };
 
+    /// <summary>
+    /// The largest upstream body this service will read. A document list for one vehicle
+    /// is kilobytes; anything approaching this is a misbehaving or hostile upstream.
+    /// </summary>
+    private const long MaxBodyBytes = 4L * 1024 * 1024;
+
+    /// <summary>
+    /// How long the body may take to arrive. The Polly pipeline has already returned by
+    /// the time the body is read, so without this the read is bounded only by the
+    /// whole-request timeout — and running that long is the condition under which a
+    /// healthy source's documents are at risk.
+    /// </summary>
+    private static readonly TimeSpan BodyReadBudget = TimeSpan.FromSeconds(2);
+
     public static async Task<UpstreamResult<IReadOnlyList<VehicleDocument>>> ExecuteAsync<TPayload>(
         HttpClient httpClient,
         string relativePath,
@@ -62,7 +76,26 @@ internal static class UpstreamClientExecutor
                     elapsed);
             }
 
-            var payload = await response.Content.ReadFromJsonAsync<TPayload>(JsonOptions, ct);
+            // The resilience pipeline returns at the response headers
+            // (HttpCompletionOption.ResponseHeadersRead above), so everything from here
+            // on is outside the per-upstream budget and needs limits of its own.
+            if (response.Content.Headers.ContentLength is { } declared && declared > MaxBodyBytes)
+            {
+                elapsed = Stopwatch.GetElapsedTime(startedAt);
+                return OversizedBody(activity, system, vin, elapsed, declared, logger);
+            }
+
+            using var bodyCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            bodyCts.CancelAfter(BodyReadBudget);
+
+            await using var bodyStream = await response.Content.ReadAsStreamAsync(bodyCts.Token);
+            await using var boundedBody = new BoundedStream(bodyStream, MaxBodyBytes);
+
+            var payload = await JsonSerializer.DeserializeAsync<TPayload>(
+                boundedBody,
+                JsonOptions,
+                bodyCts.Token);
+
             elapsed = Stopwatch.GetElapsedTime(startedAt);
 
             if (payload is null)
@@ -97,12 +130,30 @@ internal static class UpstreamClientExecutor
             activity?.SetTag("upstream.status", "cancelled");
             throw;
         }
+        catch (UpstreamBodyTooLargeException ex)
+        {
+            return Fail(
+                activity,
+                system,
+                vin,
+                startedAt,
+                UpstreamFailureReason.InvalidPayload,
+                ex.Message,
+                null,
+                logger);
+        }
         catch (TimeoutRejectedException ex)
         {
             return Fail(activity, system, vin, startedAt, UpstreamFailureReason.Timeout, ex.Message, null, logger);
         }
         catch (TaskCanceledException ex)
         {
+            return Fail(activity, system, vin, startedAt, UpstreamFailureReason.Timeout, ex.Message, null, logger);
+        }
+        catch (OperationCanceledException ex)
+        {
+            // Not the caller's cancellation (that is filtered above), so this is the
+            // body-read budget expiring.
             return Fail(activity, system, vin, startedAt, UpstreamFailureReason.Timeout, ex.Message, null, logger);
         }
         catch (BrokenCircuitException ex)
@@ -162,4 +213,33 @@ internal static class UpstreamClientExecutor
             new UpstreamFailure(reason, message, statusCode),
             elapsed);
     }
+    private static UpstreamResult<IReadOnlyList<VehicleDocument>> OversizedBody(
+        Activity? activity,
+        SourceSystem system,
+        Vin vin,
+        TimeSpan elapsed,
+        long declaredBytes,
+        ILogger logger)
+    {
+        activity?.SetTag("upstream.status", "failed");
+        activity?.SetTag("upstream.failure_reason", UpstreamFailureReason.InvalidPayload.ToString());
+
+        logger.LogWarning(
+            "Upstream {SourceSystem} declared a {DeclaredBytes}-byte body for VIN {VinHash} "
+            + "({VinMasked}), above the {MaxBodyBytes}-byte limit; refusing to read it",
+            system,
+            declaredBytes,
+            vin.Hash12,
+            vin.Masked,
+            MaxBodyBytes);
+
+        return new UpstreamResult<IReadOnlyList<VehicleDocument>>.Failed(
+            new UpstreamFailure(
+                UpstreamFailureReason.InvalidPayload,
+                $"Upstream {system} declared a body of {declaredBytes:N0} bytes, above the "
+                + $"{MaxBodyBytes:N0}-byte limit.",
+                null),
+            elapsed);
+    }
+
 }

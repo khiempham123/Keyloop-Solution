@@ -265,6 +265,9 @@ and parallel execution do not mix.
 | Add the upstreams to `/health/ready` | `Health_ready_returns_200_when_both_upstreams_are_down` |
 | Await the cache on the response path | `A_database_that_accepts_but_never_answers_does_not_hold_up_a_document_read` |
 | Hardcode the readiness budget | `Readiness_budget_comes_from_configuration_not_a_hardcoded_two_seconds` |
+| Read an upstream body with no size limit | `Reports_a_body_that_never_stops_arriving_as_an_invalid_payload` |
+| Read an upstream body with no time limit | `Reports_a_body_that_trickles_past_its_budget_as_a_timeout` |
+| Multiply kilobytes by 1024 unchecked | `Reports_a_size_it_cannot_represent_as_unknown_rather_than_a_negative_number` |
 | Cache a failed fetch | `Failed_source_results_are_never_written_to_cache` |
 
 If you can make a change that none of these notices, that is a gap in the suite worth

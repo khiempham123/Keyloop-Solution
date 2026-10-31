@@ -37,12 +37,26 @@ public sealed class SalesDocumentNormalizer : IDocumentNormalizer<SalesDocuments
                 DocumentType: MapDocType(item.DocType),
                 Title: item.Description.Trim(),
                 IssuedAt: ParseIsoDateUtc(item.CreatedDate),
-                SizeBytes: item.FileSizeKb is >= 0 ? item.FileSizeKb.Value * 1024L : null,
+                SizeBytes: ToBytes(item.FileSizeKb),
                 DownloadUrl: string.IsNullOrWhiteSpace(item.Url) ? null : item.Url.Trim()));
         }
 
         return normalized;
     }
+
+    /// <summary>
+    /// The Sales system reports size in kilobytes, so it has to be multiplied. An
+    /// upstream is untrusted input (spec §2, principle 3): unchecked, a nonsense value
+    /// wraps round and the API hands the client a <b>negative</b> byte count, which is
+    /// worse than no number because a client will believe it. A size we cannot represent
+    /// is reported as unknown, and the document is still returned.
+    /// </summary>
+    private const long MaxRepresentableKilobytes = long.MaxValue / 1024L;
+
+    private static long? ToBytes(long? kilobytes) =>
+        kilobytes is >= 0 and <= MaxRepresentableKilobytes
+            ? kilobytes.Value * 1024L
+            : null;
 
     private static DocumentType MapDocType(string? docType) =>
         docType?.Trim().ToUpperInvariant() switch

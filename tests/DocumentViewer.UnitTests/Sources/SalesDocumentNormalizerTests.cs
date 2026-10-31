@@ -21,6 +21,36 @@ public sealed class SalesDocumentNormalizerTests
         result.ShouldHaveSingleItem().SizeBytes.ShouldBe(148_480L);
     }
 
+    [Theory]
+    [InlineData(9_000_000_000_000_000_000L)]  // 9e18 KB — multiplying by 1024 overflows long
+    [InlineData(long.MaxValue)]
+    public void Reports_a_size_it_cannot_represent_as_unknown_rather_than_a_negative_number(long fileSizeKb)
+    {
+        // An upstream is untrusted input (spec §2, principle 3). Unchecked, kilobytes
+        // times 1024 wraps round and the API hands the client a negative byte count —
+        // a number that is worse than no number, because a client will believe it.
+        var payload = new SalesDocumentsResponse(
+        [
+            new SalesDocumentItem("PO-1", "PURCHASE_ORDER", "Purchase order PO-1", "2026-03-04", fileSizeKb, null)
+        ]);
+
+        var doc = _sut.Normalize(payload).ShouldHaveSingleItem();
+
+        doc.SizeBytes.ShouldBeNull();
+        doc.Title.ShouldBe("Purchase order PO-1", "an unusable size must not cost us the document");
+    }
+
+    [Fact]
+    public void Maps_the_largest_representable_size()
+    {
+        var payload = new SalesDocumentsResponse(
+        [
+            new SalesDocumentItem("PO-1", "PURCHASE_ORDER", "Purchase order PO-1", "2026-03-04", long.MaxValue / 1024, null)
+        ]);
+
+        _sut.Normalize(payload).ShouldHaveSingleItem().SizeBytes.ShouldNotBeNull();
+    }
+
     [Fact]
     public void Maps_iso_date_to_utc_midnight()
     {

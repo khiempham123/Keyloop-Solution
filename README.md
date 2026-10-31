@@ -14,7 +14,7 @@ into one model, and — the part that matters — keeps working when one of them
 | **Layer implemented** | Backend: RESTful API + persistent database |
 | **Layer stubbed** | Client: committed [`openapi.json`](openapi.json), [`requests.http`](requests.http), cURL examples below |
 | **Stack** | .NET 9 (`net9.0`), ASP.NET Core Minimal APIs, EF Core + Npgsql on Supabase PostgreSQL, Polly v8, Serilog, OpenTelemetry |
-| **Tests** | 101 — 58 unit, 43 integration (xUnit, Shouldly, NSubstitute, WireMock.Net, Testcontainers) |
+| **Tests** | 108 — 65 unit, 43 integration (xUnit, Shouldly, NSubstitute, WireMock.Net, Testcontainers) |
 
 **Read next:** [System Design Document](docs/system-design.md) for the architecture and
 the reasoning · [Code Guide](docs/code-guide.md) for a tour of the source · the
@@ -293,7 +293,7 @@ throw and the aggregator always sees exactly one outcome per source.
 
 ```bash
 dotnet test                                                   # everything
-dotnet test tests/DocumentViewer.UnitTests                    # 58, ~5s
+dotnet test tests/DocumentViewer.UnitTests                    # 65, ~5s
 dotnet test tests/DocumentViewer.IntegrationTests             # 43, ~2m45s
 dotnet test --filter FullyQualifiedName~Resilience            # the reliability rules
 ```
@@ -301,8 +301,8 @@ dotnet test --filter FullyQualifiedName~Resilience            # the reliability 
 | Group | Count | What it pins |
 |---|---|---|
 | `VinTests` | 13 | Length, illegal `I`/`O`/`Q`, ISO 3779 check digit (including the `X` remainder-10 branch), whitespace and lowercase input, and that a `Vin` cannot be formatted into a log line raw |
-| Normalisers | 15 | Kilobytes vs bytes, epoch-millis vs ISO date, nested vs flat URL, unknown enum values kept rather than dropped, malformed records skipped rather than thrown |
-| `DocumentSourceClientTests` | 8 | Every upstream failure maps to the right `UpstreamFailureReason` |
+| Normalisers | 18 | Kilobytes vs bytes, epoch-millis vs ISO date, nested vs flat URL, unknown enum values kept rather than dropped, malformed records skipped rather than thrown, and a size too large to represent reported as unknown rather than as a negative number |
+| `DocumentSourceClientTests` | 12 | Every upstream failure maps to the right `UpstreamFailureReason`, and the response body is bounded in both size and time |
 | `NpgsqlConnectionHardeningTests` | 8 | Pool-warmth and connect-timeout defaults are applied, and never override what the operator set |
 | `DocumentAggregationServiceTests` | 14 | Merge, ordering with nulls last, partial flag, stale fallback, a throwing source not losing its sibling's result, parallelism, cache writes outliving the request, and a hung database being unable to discard a healthy source's documents |
 | `VehicleDocumentsEndpointTests` | 9 | Status mapping and `ProblemDetails` |
@@ -339,6 +339,8 @@ assertions and parallel execution do not mix; `xunit.runner.json` turns it off.
 | Never retry other `4xx` | — | `Client_error_responses_are_never_retried(404, 400)` |
 | Circuit breaker, per upstream | 0.5 ratio / 30 s / 15 s | `Repeated_failures_open_the_circuit_and_subsequent_calls_fail_fast` |
 | Breakers are isolated | — | `Open_circuit_on_one_source_does_not_affect_the_other_source` |
+| Upstream body size limit | 4 MiB | `Reports_a_body_that_never_stops_arriving_as_an_invalid_payload` |
+| Upstream body read budget | 2 s | `Reports_a_body_that_trickles_past_its_budget_as_a_timeout` |
 | Cache TTL | 15 min | `Get_returns_null_for_expired_entry` |
 | Failures are never cached | — | `Failed_source_results_are_never_written_to_cache` |
 

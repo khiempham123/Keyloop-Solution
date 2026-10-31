@@ -5,10 +5,15 @@
 | | |
 |---|---|
 | **Author** | _TODO: your name_ |
-| **Date** | 2026-10-29 |
-| **Version** | 1.0 (pre-implementation) |
+| **Date** | 2026-10-29, revised 2026-10-31 |
+| **Version** | 2.0 (reconciled with the implementation) |
 | **Implemented layer** | Backend (RESTful API + persistent database) |
 | **Stubbed layer** | Client — OpenAPI contract, `requests.http`, cURL examples |
+
+---
+
+A file-by-file tour of the implementation is in [`code-guide.md`](code-guide.md);
+the repository `README.md` covers running it and the AI collaboration narrative.
 
 ---
 
@@ -366,6 +371,16 @@ record going down would pull every instance of this service out of rotation — 
 service would stop serving the cached documents it is still perfectly able to serve.
 Readiness means "I can do my job", and with warm cache and partial results, it can.
 
+The same reasoning draws a second distinction, added during implementation: a database
+that is **absent by configuration** reports `Healthy` with a note that persistence is
+disabled, because running without cache and audit is a supported configuration and the
+service still answers document searches. A database that was **configured and cannot be
+reached** reports `Unhealthy`. The readiness budget is configurable
+(`HealthChecks:DatabaseTimeoutMs`, default 5 s) and is enforced by **racing** the probe
+rather than cancelling it — Npgsql does not reliably observe a cancellation token while
+it is still opening a physical connection, so a cancel-based budget was silently ignored
+against live Supabase.
+
 ### 7.5 Service level objectives
 
 | SLO | Target | Measured from |
@@ -440,6 +455,28 @@ never be the reason a user's request fails. Supabase's transaction-mode pooler (
 6543) is used at runtime; EF Core migrations run against the direct connection (5432),
 because the pooler does not support the session-level features migrations need.
 
+**Three implementation decisions this section did not originally anticipate**, all
+forced by running against a real managed pooler rather than a local container:
+
+1. **One connection is kept warm.** `NpgsqlConnectionHardening` fills in
+   `Minimum Pool Size=1`, `Connection Idle Lifetime=300` and `Timeout=15` where the
+   operator has not set them, and a `DatabaseWarmupService` opens one connection shortly
+   after startup. Without this, the *first* database operation pays the full
+   TLS + pooler-tenant-lookup + SASL handshake — seconds, cross-region — and every
+   per-operation budget below was sized as if it were milliseconds.
+2. **Reads and writes get different budgets.** A cache read sits on the response path and
+   gets 1500 ms, after which a cache miss is an acceptable answer. A cache write happens
+   after the response and gets 8 s, because it must be able to finish a cold connection.
+   The audit write gets the same 8 s.
+3. **Writes do not use the request's cancellation token.** That token is cancelled the
+   instant the response is sent. Passing it to a cache write meant a cross-region write
+   was always cancelled mid-handshake, so the cache stayed permanently empty and the
+   stale fallback in §4.3 was unreachable code — while every test passed, because a local
+   PostgreSQL container connects in under a millisecond. Cache work also gets a 1 s
+   budget *on the response path*, beyond which the read completes and the write finishes
+   on its own: a database that accepts a connection and then never answers must not hold
+   a user's read.
+
 ### 8.5 Scaling path
 
 The API holds no per-request state, so it scales horizontally behind a load balancer.
@@ -480,6 +517,7 @@ The brief notes requirements may be ambiguous. Each ambiguity found, and the cal
 | 7 | Unknown document type from an upstream | Mapped to `Unknown`, document still returned | Dropping a document because its type is unrecognised is worse than showing it with an unknown type. |
 | 8 | Serving stale cached data on upstream failure | Allowed, flagged `status: "stale"` | Old documents are still useful; silently presenting them as fresh would not be. |
 | 9 | VIN check-digit validation | Enforced (position 9, excluding `I`/`O`/`Q`) | Rejecting a typo at the edge is cheaper than two upstream round trips returning nothing. |
+| 11 | Readiness when no database is configured | `Healthy`, with a note that persistence is disabled | Running without cache and audit is a supported configuration and the service still does its job; §7.4 defines readiness as capability, not inventory. A configured-but-unreachable database still fails readiness. |
 | 10 | Runtime version | Built on .NET 9 (`net9.0`), with the LTS migration path documented in §6 | .NET 9 reaches end-of-life 2026-11-10. Recording the constraint and the one-line route to .NET 10 LTS is better than leaving a reviewer to discover it. |
 
 ---

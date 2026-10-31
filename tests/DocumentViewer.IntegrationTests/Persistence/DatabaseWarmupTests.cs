@@ -81,6 +81,25 @@ public sealed class DatabaseWarmupTests
             "the old hardcoded 2s ceiling must no longer cap a longer configured budget");
     }
 
+    [Fact]
+    public async Task Readiness_is_healthy_when_no_database_is_configured_at_all()
+    {
+        // Running without persistence is a supported configuration: the service answers
+        // document searches, it just has no cache or audit trail. Spec §7.4 defines
+        // readiness as "I can do my job", so a deliberate absence is not a failure —
+        // only a database that was configured and cannot be reached is.
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(
+                new Dictionary<string, string?> { ["ConnectionStrings:Default"] = string.Empty }));
+        });
+        using var client = factory.CreateClient();
+
+        var ready = await client.GetAsync("/health/ready");
+
+        ready.StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
     private static WebApplicationFactory<Program> CreateFactory(
         BlackHoleListener blackHole,
         int? readinessTimeoutMs) =>

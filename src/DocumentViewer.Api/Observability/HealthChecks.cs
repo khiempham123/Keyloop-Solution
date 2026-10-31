@@ -123,7 +123,13 @@ public static class HealthChecks
             var connectionString = configuration.GetConnectionString("Default");
             if (string.IsNullOrWhiteSpace(connectionString))
             {
-                return HealthCheckResult.Unhealthy("Database connection string is not configured.");
+                // Running without persistence is a supported configuration — the
+                // service still aggregates documents, it just has no cache or audit
+                // trail. Spec §7.4 defines readiness as "I can do my job", so a
+                // deliberate absence is not a failure. A database that WAS configured
+                // and cannot be reached still fails readiness, below.
+                return HealthCheckResult.Healthy(
+                    "No database configured; running without cache and audit.");
             }
 
             var budget = ReadinessBudget(configuration);

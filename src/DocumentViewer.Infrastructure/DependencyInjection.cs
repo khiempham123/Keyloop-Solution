@@ -17,7 +17,7 @@ namespace DocumentViewer.Infrastructure;
 
 public static class DependencyInjection
 {
-    public static IServiceCollection AddDocumentSources(this IServiceCollection services, IConfiguration config)
+    public static IServiceCollection AddDocumentSources(this IServiceCollection services)
     {
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IDocumentCacheRepository, NullDocumentCacheRepository>();
@@ -30,39 +30,52 @@ public static class DependencyInjection
         services.AddSingleton<IDocumentNormalizer<SalesDocumentsResponse>, SalesDocumentNormalizer>();
         services.AddSingleton<IDocumentNormalizer<ServiceDocumentsResponse>, ServiceDocumentNormalizer>();
 
-        var salesBaseAddress = config["Upstreams:SalesSystem:BaseAddress"] ?? "http://localhost:5101";
-        var serviceBaseAddress = config["Upstreams:ServiceSystem:BaseAddress"] ?? "http://localhost:5102";
-        var minimumThroughput = int.TryParse(config["Upstreams:CircuitBreakerMinimumThroughput"], out var parsedThroughput) && parsedThroughput >= 2
-            ? parsedThroughput
-            : 5;
-
+        // Configuration is read from the service provider, not captured here. Reading it
+        // at registration time bakes in whatever appsettings.json said and silently
+        // ignores every later source — which is how an integration test that points the
+        // upstreams at a stub ends up calling the real ones instead.
         services
-            .AddHttpClient<IDocumentSource, SalesSystemClient>("SalesSystem", client =>
+            .AddHttpClient<IDocumentSource, SalesSystemClient>("SalesSystem", (sp, client) =>
             {
-                client.BaseAddress = new Uri(salesBaseAddress);
+                client.BaseAddress = new Uri(BaseAddress(sp, "SalesSystem", "http://localhost:5101"));
             })
             .AddHttpMessageHandler<CorrelationPropagationHandler>()
             .AddStandardResilienceHandler()
             .Configure((options, sp) => ConfigureResilience(
                 options,
-                minimumThroughput,
+                MinimumThroughput(sp),
                 SourceSystem.SalesSystem,
                 sp.GetRequiredService<AggregationMetrics>()));
 
         services
-            .AddHttpClient<IDocumentSource, ServiceSystemClient>("ServiceSystem", client =>
+            .AddHttpClient<IDocumentSource, ServiceSystemClient>("ServiceSystem", (sp, client) =>
             {
-                client.BaseAddress = new Uri(serviceBaseAddress);
+                client.BaseAddress = new Uri(BaseAddress(sp, "ServiceSystem", "http://localhost:5102"));
             })
             .AddHttpMessageHandler<CorrelationPropagationHandler>()
             .AddStandardResilienceHandler()
             .Configure((options, sp) => ConfigureResilience(
                 options,
-                minimumThroughput,
+                MinimumThroughput(sp),
                 SourceSystem.ServiceSystem,
                 sp.GetRequiredService<AggregationMetrics>()));
 
         return services;
+    }
+
+    private static string BaseAddress(IServiceProvider sp, string system, string fallback)
+    {
+        var configured = sp.GetRequiredService<IConfiguration>()[$"Upstreams:{system}:BaseAddress"];
+        return string.IsNullOrWhiteSpace(configured) ? fallback : configured;
+    }
+
+    private static int MinimumThroughput(IServiceProvider sp)
+    {
+        const int defaultMinimumThroughput = 5;
+        var configured = sp.GetRequiredService<IConfiguration>()["Upstreams:CircuitBreakerMinimumThroughput"];
+        return int.TryParse(configured, out var parsed) && parsed >= 2
+            ? parsed
+            : defaultMinimumThroughput;
     }
 
     public static IServiceCollection AddPersistence(this IServiceCollection services)

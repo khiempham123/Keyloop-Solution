@@ -20,7 +20,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
-builder.Services.AddDocumentSources(builder.Configuration);
+builder.Services.AddDocumentSources();
 builder.Services.AddPersistence();
 builder.Services.AddDocumentViewerHealthChecks();
 builder.Services.AddScoped<IDocumentAggregationService, DocumentAggregationService>();

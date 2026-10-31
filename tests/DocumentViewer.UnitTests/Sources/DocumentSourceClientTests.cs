@@ -152,7 +152,8 @@ public sealed class DocumentSourceClientTests
 
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddDocumentSources(config);
+        services.AddSingleton<IConfiguration>(config);
+        services.AddDocumentSources();
 
         using var provider = services.BuildServiceProvider();
         var sources = provider.GetServices<IDocumentSource>().ToList();

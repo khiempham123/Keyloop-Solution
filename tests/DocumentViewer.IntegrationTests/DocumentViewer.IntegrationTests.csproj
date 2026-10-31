@@ -11,6 +11,7 @@
     <PackageReference Include="NSubstitute" Version="5.3.0" />
     <PackageReference Include="Shouldly" Version="4.3.0" />
     <PackageReference Include="Testcontainers.PostgreSql" Version="4.3.0" />
+    <PackageReference Include="WireMock.Net" Version="2.21.0" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
@@ -24,6 +25,15 @@
     <ProjectReference Include="..\..\src\DocumentViewer.Application\DocumentViewer.Application.csproj" />
     <ProjectReference Include="..\..\src\DocumentViewer.Infrastructure\DocumentViewer.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\DocumentViewer.Domain\DocumentViewer.Domain.csproj" />
+  </ItemGroup>
+
+
+  <ItemGroup>
+    <!-- Several integration tests assert on elapsed time (parallel fan-out, timeout
+         budgets, readiness budgets). Running test collections in parallel makes those
+         measurements depend on how busy the machine is, which is flakiness, not a
+         finding. -->
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

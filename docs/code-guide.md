@@ -1,7 +1,11 @@
 # Code Guide
 
-A tour of the source for someone who has just cloned this repository. It explains **why
-each piece exists and what would break without it** — the design reasoning is in
+A tour of the source for someone who has just cloned this repository, in about ten
+minutes. It explains **why each piece exists and what would break without it**.
+
+For the full reference — every file's public surface, the request flow traced through
+real method calls, every budget and limit in one table, and recipes for extending the
+service — see [`developer-guide.md`](developer-guide.md). The design reasoning is in
 [`system-design.md`](system-design.md), and the record of what the AI got wrong is in
 [`ai-collaboration/review-log.md`](ai-collaboration/review-log.md).
 

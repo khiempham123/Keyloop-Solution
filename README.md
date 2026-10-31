@@ -17,7 +17,9 @@ into one model, and — the part that matters — keeps working when one of them
 | **Tests** | 108 — 65 unit, 43 integration (xUnit, Shouldly, NSubstitute, WireMock.Net, Testcontainers) |
 
 **Read next:** [System Design Document](docs/system-design.md) for the architecture and
-the reasoning · [Code Guide](docs/code-guide.md) for a tour of the source · the
+the reasoning · [Code Guide](docs/code-guide.md) for a ten-minute tour of the source ·
+[Developer Guide](docs/developer-guide.md) for the full reference — files, flows, every
+budget and limit, and extension recipes · the
 [AI Collaboration Narrative](#ai-collaboration-narrative) below.
 
 ---
@@ -285,7 +287,9 @@ behaviour this whole service is built around, and only when an upstream is down.
 every source returns an `UpstreamResult` instead of throwing, `Task.WhenAll` can never
 throw and the aggregator always sees exactly one outcome per source.
 
-[`docs/code-guide.md`](docs/code-guide.md) walks the source file by file.
+[`docs/code-guide.md`](docs/code-guide.md) walks the source as a narrative tour;
+[`docs/developer-guide.md`](docs/developer-guide.md) is the reference you want when
+you are about to change something.
 
 ---
 

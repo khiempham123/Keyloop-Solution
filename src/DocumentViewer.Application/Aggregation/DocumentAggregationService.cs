@@ -165,14 +165,20 @@ public sealed class DocumentAggregationService(
         }
     }
 
+    /// <summary>
+    /// Reads the cache under a response-path budget, and records the outcome
+    /// synchronously so an abandoned lookup can never report a hit after the response
+    /// has already gone out without it.
+    /// </summary>
     private async Task<CachedSourceDocuments?> TryCacheGetWithinBudgetAsync(
         Vin vin,
         SourceSystem system,
         CancellationToken ct)
     {
-        var lookup = TryCacheGetAsync(vin, system, ct);
+        var lookup = CacheLookupAsync(vin, system, ct);
         if (await Task.WhenAny(lookup, Task.Delay(CacheOperationBudget)) != lookup)
         {
+            metrics.RecordCacheLookup("timeout");
             logger.LogWarning(
                 "Cache lookup for source {SourceSystem} and VIN {VinHash} ({VinMasked}) exceeded "
                 + "{BudgetMs}ms; treating as a cache miss",
@@ -184,44 +190,46 @@ public sealed class DocumentAggregationService(
             return null;
         }
 
-        return await lookup;
+        var (documents, outcome) = await lookup;
+        metrics.RecordCacheLookup(outcome);
+        return documents;
     }
 
     private static void Forget(Task task) =>
         task.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
 
-    private async Task<CachedSourceDocuments?> TryCacheGetAsync(Vin vin, SourceSystem system, CancellationToken ct)
+    /// <summary>
+    /// Reads the cache and reports an outcome. It is structurally incapable of throwing,
+    /// <b>including on cancellation</b> — and that is the point. This read happens after
+    /// the fan-out, so it runs about a second before the whole-request budget expires
+    /// whenever a source hit its own total timeout. An exception escaping here propagated
+    /// out of <see cref="GetDocumentsAsync"/> and discarded the healthy source's
+    /// already-completed documents, turning a 200 with partial results into a 503 with
+    /// nothing in it. A cache is an optimisation; it is never a reason a read fails.
+    /// </summary>
+    private async Task<(CachedSourceDocuments? Documents, string Outcome)> CacheLookupAsync(
+        Vin vin,
+        SourceSystem system,
+        CancellationToken ct)
     {
         try
         {
             var cached = await cache.GetAsync(vin, system, ct);
-            metrics.RecordCacheLookup(cached is not null ? "hit" : "miss");
-            return cached;
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
+            return (cached, cached is not null ? "hit" : "miss");
         }
         catch (Exception ex)
         {
-            metrics.RecordCacheLookup("error");
             logger.LogWarning(
                 ex,
-                "Cache lookup failed for source {SourceSystem} and VIN {VinHash} ({VinMasked}); treating as cache miss",
+                "Cache lookup failed for source {SourceSystem} and VIN {VinHash} ({VinMasked}); "
+                + "treating as a cache miss",
                 system,
                 vin.Hash12,
                 vin.Masked);
-            return null;
+            return (null, "error");
         }
     }
 
-    /// <summary>
-    /// Writes the cache deliberately WITHOUT the request's cancellation token. That
-    /// token is cancelled the moment the response is sent, and a cross-region write
-    /// takes longer than the request's remaining lifetime — so passing it meant nothing
-    /// was ever cached and the stale fallback in spec §4.3 could never trigger. The
-    /// repository applies its own write budget.
-    /// </summary>
     private async Task TryCacheUpsertAsync(
         Vin vin,
         SourceSystem system,

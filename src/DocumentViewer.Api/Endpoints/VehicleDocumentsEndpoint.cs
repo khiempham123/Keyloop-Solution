@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using DocumentViewer.Api.Contracts;
 using DocumentViewer.Application.Aggregation;
+using DocumentViewer.Application.Observability;
 using DocumentViewer.Application.Persistence;
 using DocumentViewer.Domain;
 
@@ -29,6 +30,7 @@ public static class VehicleDocumentsEndpoint
         string vin,
         IDocumentAggregationService aggregation,
         ISearchAuditRepository audit,
+        IAggregationMetrics metrics,
         ILoggerFactory loggerFactory,
         HttpContext httpContext)
     {
@@ -56,6 +58,24 @@ public static class VehicleDocumentsEndpoint
         }
         catch (OperationCanceledException)
         {
+            // The one outcome where the user got nothing at all, so the one that most
+            // needs counting: the availability SLO in spec §7.5 is measured from
+            // aggregation.duration{outcome}, and search_audit is the only durable record
+            // of user-visible degradation (§8.4). Both were blind to this path.
+            var elapsed = Stopwatch.GetElapsedTime(startedAt);
+            metrics.RecordAggregation("timeout", elapsed);
+            FireAndForgetAudit(
+                audit,
+                new SearchAuditEntry(
+                    Vin: parsedVin.Value,
+                    CorrelationId: ResolveCorrelationId(httpContext),
+                    SearchedAt: DateTimeOffset.UtcNow,
+                    DurationMs: (int)elapsed.TotalMilliseconds,
+                    Partial: true,
+                    Sources: []),
+                parsedVin,
+                loggerFactory.CreateLogger("DocumentViewer.Audit"));
+
             httpContext.Response.Headers.RetryAfter = "30";
             return TypedResults.Problem(
                 title: "Request timed out waiting for upstream document systems.",

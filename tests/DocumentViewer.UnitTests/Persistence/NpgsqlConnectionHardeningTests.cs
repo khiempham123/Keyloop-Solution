@@ -14,16 +14,25 @@ public sealed class NpgsqlConnectionHardeningTests
     {
         var hardened = new NpgsqlConnectionStringBuilder(NpgsqlConnectionHardening.Harden(Bare));
 
+        // MinPoolSize is the one setting here that changes Npgsql's behaviour: its
+        // default is 0, so without this nothing keeps a connection warm.
         hardened.MinPoolSize.ShouldBeGreaterThanOrEqualTo(1);
-        hardened.ConnectionIdleLifetime.ShouldBeGreaterThanOrEqualTo(300);
     }
 
     [Fact]
-    public void Allows_a_cold_cross_region_handshake_to_finish()
+    public void Pins_every_setting_it_depends_on_instead_of_inheriting_an_Npgsql_default()
     {
-        var hardened = new NpgsqlConnectionStringBuilder(NpgsqlConnectionHardening.Harden(Bare));
+        // Npgsql's own defaults already happen to be Timeout=15 and
+        // ConnectionIdleLifetime=300, so asserting those *values* would pass even if
+        // Harden returned its input untouched — the "test that cannot fail" trap. These
+        // assertions are on what Harden EMITS, so they fail if it stops pinning them,
+        // and the pinning is what stops a future Npgsql default change from silently
+        // widening the handshake budget this service depends on.
+        var hardened = NpgsqlConnectionHardening.Harden(Bare).ShouldNotBeNull();
 
-        hardened.Timeout.ShouldBeGreaterThanOrEqualTo(15);
+        hardened.ShouldContain("Timeout=15", Case.Sensitive);
+        hardened.ShouldContain("Minimum Pool Size=1", Case.Sensitive);
+        hardened.ShouldContain("Connection Idle Lifetime=300", Case.Sensitive);
     }
 
     [Fact]

@@ -34,6 +34,10 @@ public sealed class UpstreamResilienceTests
     public async Task Parallel_fan_out_takes_roughly_one_upstream_latency_not_two()
     {
         using var upstreams = WireMockUpstreamFixture.Start();
+        await using var factory = CreateFactory(upstreams);
+        using var client = factory.CreateClient();
+        await WarmUpAsync(client, upstreams);
+
         var oneSecond = TimeSpan.FromSeconds(1);
         upstreams.StubHealthy(
             upstreams.Sales, WireMockUpstreamFixture.SalesPath(TestVin),
@@ -41,9 +45,6 @@ public sealed class UpstreamResilienceTests
         upstreams.StubHealthy(
             upstreams.Service, WireMockUpstreamFixture.ServicePath(TestVin),
             WireMockUpstreamFixture.ServicePayload(2), oneSecond);
-
-        await using var factory = CreateFactory(upstreams);
-        using var client = factory.CreateClient();
 
         var sw = Stopwatch.StartNew();
         var response = await client.GetAsync(Endpoint);
@@ -163,17 +164,19 @@ public sealed class UpstreamResilienceTests
 
         await using var factory = CreateFactory(upstreams, breakerMinimumThroughput: 2);
         using var client = factory.CreateClient();
+        await WarmUpAsync(client, upstreams);
+        upstreams.StubStatus(upstreams.Sales, WireMockUpstreamFixture.SalesPath(TestVin), 503);
+        upstreams.StubHealthy(
+            upstreams.Service, WireMockUpstreamFixture.ServicePath(TestVin),
+            WireMockUpstreamFixture.ServicePayload(1));
 
         UpstreamFailureReason? lastReason = null;
         for (var attempt = 0; attempt < 12; attempt++)
         {
-            var response = await client.GetAsync(Endpoint);
-            if (response.StatusCode != HttpStatusCode.OK)
-            {
-                continue;
-            }
-
-            lastReason = Source(await Read(response), SourceSystem.SalesSystem).Error!.Reason;
+            // Read asserts 200, so a both-sources-failed response fails loudly here
+            // rather than being swallowed and reported later as a misleading null.
+            lastReason = Source(await Read(await client.GetAsync(Endpoint)), SourceSystem.SalesSystem)
+                .Error!.Reason;
             if (lastReason == UpstreamFailureReason.CircuitOpen)
             {
                 break;
@@ -199,17 +202,16 @@ public sealed class UpstreamResilienceTests
 
         await using var factory = CreateFactory(upstreams, breakerMinimumThroughput: 2);
         using var client = factory.CreateClient();
+        await WarmUpAsync(client, upstreams);
+        upstreams.StubStatus(upstreams.Sales, WireMockUpstreamFixture.SalesPath(TestVin), 503);
+        upstreams.StubHealthy(
+            upstreams.Service, WireMockUpstreamFixture.ServicePath(TestVin),
+            WireMockUpstreamFixture.ServicePayload(3));
 
         DocumentsResponse body = null!;
         for (var attempt = 0; attempt < 12; attempt++)
         {
-            var response = await client.GetAsync(Endpoint);
-            if (response.StatusCode != HttpStatusCode.OK)
-            {
-                continue;
-            }
-
-            body = await Read(response);
+            body = await Read(await client.GetAsync(Endpoint));
             if (Source(body, SourceSystem.SalesSystem).Error!.Reason == UpstreamFailureReason.CircuitOpen)
             {
                 break;
@@ -277,6 +279,30 @@ public sealed class UpstreamResilienceTests
         body.Partial.ShouldBeTrue();
         Source(body, SourceSystem.ServiceSystem).Status.ShouldBe(SourceStatus.Stale);
         body.Documents.Count.ShouldBe(3, "two live from Sales plus one stale from Service");
+    }
+
+    /// <summary>
+    /// Sends one throwaway request through the host so the measurement that follows is
+    /// not paying for host build, JIT and the first socket. Without this,
+    /// <c>Parallel_fan_out…</c> failed every time it was run on its own — it only passed
+    /// because earlier tests had warmed the process, which is a test that measures the
+    /// order it was run in rather than the product.
+    /// </summary>
+    private static async Task WarmUpAsync(HttpClient client, WireMockUpstreamFixture upstreams)
+    {
+        upstreams.StubHealthy(
+            upstreams.Sales, WireMockUpstreamFixture.SalesPath(TestVin),
+            WireMockUpstreamFixture.SalesPayload(1));
+        upstreams.StubHealthy(
+            upstreams.Service, WireMockUpstreamFixture.ServicePath(TestVin),
+            WireMockUpstreamFixture.ServicePayload(1));
+
+        (await client.GetAsync(Endpoint)).StatusCode.ShouldBe(
+            HttpStatusCode.OK,
+            "the warm-up request itself must succeed, or the test environment is the problem");
+
+        upstreams.Sales.Reset();
+        upstreams.Service.Reset();
     }
 
     private static string Endpoint => $"/api/v1/vehicles/{TestVin}/documents";

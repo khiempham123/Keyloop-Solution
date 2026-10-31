@@ -245,7 +245,7 @@ Three fixtures are worth knowing:
 | The black-hole listener in `DatabaseWarmupTests` | A `TcpListener` that accepts the connection and then never answers. A closed port is refused instantly and proves nothing about timeouts; this is what a cold managed pooler looks like from the client's side. |
 
 And one configuration decision: `xunit.runner.json` sets
-`parallelizeTestCollections: false`. Four tests assert on elapsed time, and CPU contention
+`parallelizeTestCollections: false`. Five tests assert on elapsed time, and CPU contention
 from sibling test classes pushed a deliberately *healthy* upstream past its 2 s
 per-attempt timeout — the product was right and the harness was wrong. Latency assertions
 and parallel execution do not mix.

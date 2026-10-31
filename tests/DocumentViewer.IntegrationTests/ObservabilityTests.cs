@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
@@ -34,6 +35,25 @@ public sealed class ObservabilityTests(PostgresContainerFixture postgres)
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         response.Headers.TryGetValues("X-Correlation-Id", out var values).ShouldBeTrue();
         values.ShouldHaveSingleItem().ShouldBe("keyloop-corr-2026-001");
+    }
+
+    [Fact]
+    public async Task The_harness_itself_delivers_a_document_from_each_stubbed_source()
+    {
+        // Guards the harness, not the product. Both upstream stubs previously used field
+        // names the normalisers do not read ("name" for Sales, "title" for Service), so
+        // every document was skipped and every test in this class ran against a
+        // zero-document response — and still passed, because none of them counted.
+        await using var harness = CreateHarness(postgres.ConnectionString);
+
+        using var response = await harness.Client.GetAsync($"/api/v1/vehicles/{TestVin}/documents");
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        body.RootElement.GetProperty("documents").GetArrayLength().ShouldBe(
+            2,
+            "one document from each stubbed source; a skipped record means a stub field name is wrong");
+        body.RootElement.GetProperty("partial").GetBoolean().ShouldBeFalse();
     }
 
     [Fact]
@@ -326,7 +346,7 @@ public sealed class ObservabilityTests(PostgresContainerFixture postgres)
                       {
                         "documentId": "PO-88213",
                         "docType": "PURCHASE_ORDER",
-                        "name": "Vehicle purchase order",
+                        "description": "Vehicle purchase order",
                         "createdDate": "2026-10-15",
                         "fileSizeKb": 145,
                         "url": "https://sales.mock/documents/PO-88213"
@@ -341,7 +361,7 @@ public sealed class ObservabilityTests(PostgresContainerFixture postgres)
                         {
                           "id": 88213,
                           "category": "JobCard",
-                          "title": "Annual service job card",
+                          "name": "Annual service job card",
                           "timestamp": 1760500000000,
                           "bytes": 148213,
                           "links": { "self": "https://service.mock/docs/88213" }

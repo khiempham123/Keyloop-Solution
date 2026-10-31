@@ -40,3 +40,8 @@ artifacts/
 !.vscode/extensions.json
 .idea/
 *.swp
+
+# Internal working notes and author-local toolchain shim — not part of the submission
+TODO.md
+docs/superpowers/RESUME.md
+env.sh

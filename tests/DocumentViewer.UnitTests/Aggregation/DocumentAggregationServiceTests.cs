@@ -177,6 +177,117 @@ public sealed class DocumentAggregationServiceTests
     }
 
     [Fact]
+    public async Task A_hung_database_cannot_discard_a_healthy_source_when_the_request_budget_expires()
+    {
+        // The cache read happens AFTER the fan-out, so it runs at ~5s whenever a source
+        // hits its 5s total timeout — about 1s before the 6s whole-request budget. If a
+        // hung database then let an OperationCanceledException out of the cache, it
+        // propagated through GetDocumentsAsync and threw away the healthy source's
+        // already-completed documents: a 503 with nothing in it, which is the exact
+        // failure UpstreamResult<T> exists to prevent (spec §4.2).
+        var healthy = Source(SourceSystem.SalesSystem, Docs(SourceSystem.SalesSystem, 2));
+        var broken = FailingSource(SourceSystem.ServiceSystem, UpstreamFailureReason.HttpError, 503);
+        using var requestCts = new CancellationTokenSource();
+        requestCts.CancelAfter(TimeSpan.FromMilliseconds(200));
+
+        var result = await ServiceWithCache(new HangingCache(), healthy, broken)
+            .GetDocumentsAsync(TestVin, requestCts.Token);
+
+        result.Documents.Count.ShouldBe(2, "the healthy source's documents must survive");
+        result.Partial.ShouldBeTrue();
+        result.AllSourcesFailed.ShouldBeFalse();
+        result.Sources.Single(r => r.System == SourceSystem.ServiceSystem).Status
+            .ShouldBe(SourceStatus.Failed);
+    }
+
+    [Fact]
+    public async Task A_cache_lookup_that_exceeds_its_budget_is_recorded_as_a_timeout_not_a_hit()
+    {
+        // The abandoned lookup must not record anything later: §7.2 says this metric
+        // answers "is the cache earning its complexity", and a hit recorded after the
+        // response went out without it is the opposite of that answer.
+        var metrics = new RecordingMetrics();
+        var broken = FailingSource(SourceSystem.ServiceSystem, UpstreamFailureReason.HttpError, 503);
+        var cache = new SlowReadCache(TimeSpan.FromSeconds(2), Docs(SourceSystem.ServiceSystem, 1));
+
+        var result = await ServiceWithCache(cache, metrics, broken)
+            .GetDocumentsAsync(TestVin, CancellationToken.None);
+
+        result.Sources.Single().Status.ShouldBe(SourceStatus.Failed);
+        metrics.CacheLookups.ShouldBe(["timeout"]);
+
+        await cache.Finished;
+        await Task.Delay(100);
+        metrics.CacheLookups.ShouldBe(["timeout"], "the abandoned lookup must record nothing");
+    }
+
+    private sealed class HangingCache : IDocumentCacheRepository
+    {
+        public async Task<CachedSourceDocuments?> GetAsync(Vin vin, SourceSystem system, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            return null;
+        }
+
+        public Task UpsertAsync(
+            Vin vin,
+            SourceSystem system,
+            IReadOnlyList<VehicleDocument> documents,
+            TimeSpan ttl,
+            CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class SlowReadCache(TimeSpan readDuration, IReadOnlyList<VehicleDocument> documents)
+        : IDocumentCacheRepository
+    {
+        private readonly TaskCompletionSource finished =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Finished => finished.Task;
+
+        public async Task<CachedSourceDocuments?> GetAsync(Vin vin, SourceSystem system, CancellationToken ct)
+        {
+            try
+            {
+                await Task.Delay(readDuration, ct);
+                return new CachedSourceDocuments(documents, DateTimeOffset.UtcNow);
+            }
+            finally
+            {
+                finished.TrySetResult();
+            }
+        }
+
+        public Task UpsertAsync(
+            Vin vin,
+            SourceSystem system,
+            IReadOnlyList<VehicleDocument> documents,
+            TimeSpan ttl,
+            CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingMetrics : IAggregationMetrics
+    {
+        private readonly List<string> cacheLookups = [];
+
+        public IReadOnlyList<string> CacheLookups
+        {
+            get { lock (cacheLookups) { return cacheLookups.ToList(); } }
+        }
+
+        public void RecordAggregation(string outcome, TimeSpan duration) { }
+
+        public void RecordUpstream(SourceSystem system, SourceStatus status, TimeSpan duration) { }
+
+        public void RecordPartial() { }
+
+        public void RecordCacheLookup(string result)
+        {
+            lock (cacheLookups) { cacheLookups.Add(result); }
+        }
+    }
+
+    [Fact]
     public async Task Cache_writes_outlive_the_request_and_never_hold_the_response()
     {
         // Found against live Supabase: cache writes ran on the request's cancellation
@@ -247,7 +358,13 @@ public sealed class DocumentAggregationServiceTests
         ServiceWithCache(new NoOpCache(), sources);
 
     private static DocumentAggregationService ServiceWithCache(IDocumentCacheRepository cache, params IDocumentSource[] sources) =>
-        new(sources, cache, new NoOpMetrics(), new FixedTimeProvider(FixedNow), NullLogger<DocumentAggregationService>.Instance);
+        ServiceWithCache(cache, new NoOpMetrics(), sources);
+
+    private static DocumentAggregationService ServiceWithCache(
+        IDocumentCacheRepository cache,
+        IAggregationMetrics metrics,
+        params IDocumentSource[] sources) =>
+        new(sources, cache, metrics, new FixedTimeProvider(FixedNow), NullLogger<DocumentAggregationService>.Instance);
 
     private static IDocumentSource Source(SourceSystem system, IReadOnlyList<VehicleDocument> docs)
     {

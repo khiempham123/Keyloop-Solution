@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DocumentViewer.Api.Contracts;
 using DocumentViewer.Api.Endpoints;
 using DocumentViewer.Api.Middleware;
 using DocumentViewer.Api.Observability;
@@ -19,7 +20,8 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 });
 
 builder.Services.AddProblemDetails();
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(options =>
+    options.AddSchemaTransformer<OptionalPropertySchemaTransformer>());
 builder.Services.AddDocumentSources();
 builder.Services.AddPersistence();
 builder.Services.AddDocumentViewerHealthChecks();

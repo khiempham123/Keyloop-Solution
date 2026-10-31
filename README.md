@@ -14,7 +14,7 @@ into one model, and — the part that matters — keeps working when one of them
 | **Layer implemented** | Backend: RESTful API + persistent database |
 | **Layer stubbed** | Client: committed [`openapi.json`](openapi.json), [`requests.http`](requests.http), cURL examples below |
 | **Stack** | .NET 9 (`net9.0`), ASP.NET Core Minimal APIs, EF Core + Npgsql on Supabase PostgreSQL, Polly v8, Serilog, OpenTelemetry |
-| **Tests** | 96 — 56 unit, 40 integration (xUnit, Shouldly, NSubstitute, WireMock.Net, Testcontainers) |
+| **Tests** | 101 — 58 unit, 43 integration (xUnit, Shouldly, NSubstitute, WireMock.Net, Testcontainers) |
 
 **Read next:** [System Design Document](docs/system-design.md) for the architecture and
 the reasoning · [Code Guide](docs/code-guide.md) for a tour of the source · the
@@ -56,7 +56,7 @@ dotnet test
 
 The integration tests start their own throwaway PostgreSQL container via Testcontainers
 and their own stub upstreams via WireMock.Net, so they need Docker but **not** a
-Supabase account and **not** `docker compose up`. Expect roughly two and a half minutes:
+Supabase account and **not** `docker compose up`. Expect roughly three minutes:
 several tests deliberately wait on timeouts, and integration test collections run
 sequentially on purpose (see [Tests](#tests)).
 
@@ -293,8 +293,8 @@ throw and the aggregator always sees exactly one outcome per source.
 
 ```bash
 dotnet test                                                   # everything
-dotnet test tests/DocumentViewer.UnitTests                    # 56, ~3s
-dotnet test tests/DocumentViewer.IntegrationTests             # 40, ~2m
+dotnet test tests/DocumentViewer.UnitTests                    # 58, ~5s
+dotnet test tests/DocumentViewer.IntegrationTests             # 43, ~2m45s
 dotnet test --filter FullyQualifiedName~Resilience            # the reliability rules
 ```
 
@@ -304,11 +304,13 @@ dotnet test --filter FullyQualifiedName~Resilience            # the reliability 
 | Normalisers | 15 | Kilobytes vs bytes, epoch-millis vs ISO date, nested vs flat URL, unknown enum values kept rather than dropped, malformed records skipped rather than thrown |
 | `DocumentSourceClientTests` | 8 | Every upstream failure maps to the right `UpstreamFailureReason` |
 | `NpgsqlConnectionHardeningTests` | 8 | Pool-warmth and connect-timeout defaults are applied, and never override what the operator set |
-| `DocumentAggregationServiceTests` | 12 | Merge, ordering with nulls last, partial flag, stale fallback, a throwing source not losing its sibling's result, parallelism, and cache writes outliving the request |
+| `DocumentAggregationServiceTests` | 14 | Merge, ordering with nulls last, partial flag, stale fallback, a throwing source not losing its sibling's result, parallelism, cache writes outliving the request, and a hung database being unable to discard a healthy source's documents |
 | `VehicleDocumentsEndpointTests` | 9 | Status mapping and `ProblemDetails` |
 | Persistence | 12 | Round-trip, expiry, concurrent upserts, audit, and that an unreachable or absent database never breaks a read |
-| `ObservabilityTests` | 9 | Correlation propagation, two overlapping upstream spans, no raw VIN in any log line, health-check semantics, client cancellation |
+| `ObservabilityTests` | 10 | Correlation propagation, two overlapping upstream spans, no raw VIN in any log line, health-check semantics, client cancellation, and a guard that the stubs actually deliver documents |
 | `UpstreamResilienceTests` | 10 | The reliability rules below |
+| `TimeoutAccountingTests` | 1 | A whole-request timeout is counted and audited — the one outcome where the user got nothing is the one that most needs recording |
+| `OpenApiContractTests` | 1 | Every property the committed contract marks `required` is actually present in a real response |
 
 Three things about these tests are deliberate and worth a reviewer's attention:
 
@@ -321,7 +323,7 @@ would prove nothing about timeouts. These tests point the database at a `TcpList
 that accepts the connection and then never answers — which is what a cold managed pooler
 looks like from the client's side.
 
-**Integration collections do not run in parallel.** Four tests assert on elapsed time.
+**Integration collections do not run in parallel.** Five tests assert on elapsed time.
 Run alongside sibling test classes, CPU contention pushed a deliberately *healthy*
 upstream past its 2s per-attempt timeout, and the suite failed on a correct `503`. Latency
 assertions and parallel execution do not mix; `xunit.runner.json` turns it off.
@@ -344,8 +346,10 @@ assertions and parallel execution do not mix; `xunit.runner.json` turns it off.
 
 ## Observability
 
-Serilog writes structured JSON to stdout. Every line carries `CorrelationId`, `TraceId`
-and, where relevant, `SourceSystem` and `VinHash`.
+Serilog writes structured JSON to stdout. Every request-scoped line carries
+`CorrelationId` and `TraceId`, and, where relevant, `SourceSystem` and `VinHash`.
+(Startup, pool warm-up and background audit lines have no request to belong to and so
+carry neither.)
 
 **A VIN is treated as personal data.** No log line contains one. Logs carry `VinHash`
 (first 12 hex of SHA-256) plus the last six characters — enough for support to correlate
@@ -415,7 +419,7 @@ thrown away.
 - **Every test was interrogated with one question: what production change would make this
   fail?** One readiness test could not answer it and was rewritten (I-9).
 - **Deviations from the plan were recorded as rulings**, with what each costs if wrong, in
-  the ledger at [`.superpowers/sdd/`](.superpowers/sdd/).
+  the ledger at [`docs/ai-collaboration/implementation-ledger.md`](docs/ai-collaboration/implementation-ledger.md).
 
 ### What the AI got wrong
 

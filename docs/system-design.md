@@ -429,13 +429,13 @@ one failing system degrade the other — the isolation is the point.
 search_audit                           document_metadata_cache
   id            bigserial PK             vin             varchar(17)  ┐ PK
   vin           varchar(17)              source_system   smallint     ┘
-  correlation_id uuid                    payload         jsonb
+  correlation_id varchar(128)                    payload         jsonb
   searched_at   timestamptz              document_count  int
   duration_ms   int                      fetched_at      timestamptz
   partial       boolean                  expires_at      timestamptz
   source_report jsonb
 
-  idx (vin, searched_at desc)            idx (expires_at)  -- eviction sweep
+  idx (vin, searched_at desc)            idx (expires_at)  -- for the eviction sweep (not built; see §9)
 ```
 
 **Why a database at all.** The brief requires a persistent database, and Scenario D is

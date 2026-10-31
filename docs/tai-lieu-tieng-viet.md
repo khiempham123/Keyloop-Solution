@@ -10,6 +10,10 @@ liền mạch:
 | **Phần I** | [`system-design.md`](system-design.md) | **Vì sao** — kiến trúc, đánh đổi, giả định, phạm vi loại trừ | Trước khi muốn phản biện một quyết định thiết kế |
 | **Phần II** | [`code-guide.md`](code-guide.md) | **Định hướng** — tour mã nguồn 10 phút | Vừa clone repo về |
 | **Phần III** | [`developer-guide.md`](developer-guide.md) | **Tra cứu** — file, luồng, con số, cách mở rộng | Sắp sửa đổi code |
+| **Phần IV** | [`../README.md`](../README.md) | **Chạy nó** — quickstart, cấu hình, API, xem nó suy giảm, bộ test, tường thuật cộng tác với AI | Muốn chạy được trên máy mình |
+| **Phần V** | [`ai-collaboration/review-log.md`](ai-collaboration/review-log.md) | **Bằng chứng** — 22 entry: AI đề xuất gì, em đổi gì, vì sao quan trọng | Muốn biết AI đã sai ở đâu |
+| **Phần VI** | [`ai-collaboration/prompts.md`](ai-collaboration/prompts.md) | **Chiến lược** — chuỗi prompt và vì sao theo thứ tự đó | Muốn hiểu cách điều khiển AI |
+| **Phần VII** | [`ai-collaboration/implementation-ledger.md`](ai-collaboration/implementation-ledger.md) | **Phán quyết** — mọi quyết định khi chạy plan, kèm giá phải trả nếu sai | Muốn kiểm tra các quyết định thay mình |
 
 > **Lưu ý về tính thẩm quyền:** ba file tiếng Anh là bản gốc và là bản nộp cho Keyloop.
 > Bản tiếng Việt này để đọc hiểu nhanh. Nếu có khác biệt, **bản tiếng Anh là bản đúng**.
@@ -1367,3 +1371,1181 @@ có một lý lẽ** và tìm trong review log **trước khi** gạt bỏ nó.
 | seam | đường may | Điểm chèn abstraction để test/mở rộng |
 | invariant | bất biến | Điều kiện không được phá |
 | normaliser | normaliser / bộ chuẩn hóa | Chuyển schema upstream về mô hình hợp nhất |
+
+---
+---
+
+# PHẦN IV — README: CHẠY, CẤU HÌNH, VÀ XEM NÓ SUY GIẢM
+
+Tài liệu của một chiếc xe nằm ở hai hệ thống nguồn phát triển độc lập nhau. Service này
+trả lời **một câu hỏi bằng một request**: *cho một VIN, xe này có những tài liệu nào, và
+mỗi tài liệu đến từ đâu?*
+
+Nó fan-out tới cả hai hệ thống **song song**, chuẩn hóa hai hình dạng payload không liên
+quan gì nhau về một mô hình duy nhất, và — **phần quan trọng nhất** — vẫn hoạt động khi
+một trong hai hệ thống không hoạt động.
+
+| | |
+|---|---|
+| **Tầng đã hiện thực** | Backend: RESTful API + database bền vững |
+| **Tầng để stub** | Client: [`openapi.json`](../openapi.json) đã commit, [`requests.http`](../requests.http), ví dụ cURL bên dưới |
+| **Stack** | .NET 9 (`net9.0`), ASP.NET Core Minimal APIs, EF Core + Npgsql trên Supabase PostgreSQL, Polly v8, Serilog, OpenTelemetry |
+| **Test** | 108 — 65 unit, 43 integration (xUnit, Shouldly, NSubstitute, WireMock.Net, Testcontainers) |
+
+---
+
+## IV.1. Quickstart
+
+### Yêu cầu cài trước
+
+- [.NET SDK 9.0](https://dotnet.microsoft.com/download/dotnet/9.0) — `dotnet --version`
+  phải in ra `9.0.x`
+- Docker (cho hai mock upstream service, và cho integration test)
+- Một database Supabase hoặc PostgreSQL — **không bắt buộc**, xem §IV.2.2
+
+### Chạy
+
+```bash
+# 1. Khởi động hai hệ thống nguồn đã mock (cổng 5101 và 5102)
+docker compose up -d --build
+
+# 2. Chạy API (cổng 5080)
+dotnet run --project src/DocumentViewer.Api --urls http://localhost:5080
+```
+
+```bash
+# 3. Hỏi nó một câu
+curl -s http://localhost:5080/api/v1/vehicles/1HGCM82633A004352/documents | jq
+```
+
+Anh sẽ thấy **bảy tài liệu** — bốn từ hệ thống Sales, ba từ hệ thống Service — mỗi cái
+gắn `sourceSystem` của nó, và `"partial": false`.
+
+### Test
+
+```bash
+dotnet test
+```
+
+Integration test **tự khởi động** container PostgreSQL dùng-một-lần qua Testcontainers và
+các stub upstream của chính nó qua WireMock.Net, nên chúng cần Docker nhưng **không cần**
+tài khoản Supabase và **không cần** `docker compose up`. Dự kiến khoảng **ba phút**: có
+vài test cố ý chờ hết timeout, và các integration test collection **chạy tuần tự có chủ
+ý** (xem §IV.5).
+
+---
+
+## IV.2. Cấu hình
+
+Mọi thứ đều cấu hình được; **không cần cấu hình gì** để chạy demo.
+
+| Thiết lập | Mặc định | Nó làm gì |
+|---|---|---|
+| `Upstreams:SalesSystem:BaseAddress` | `http://localhost:5101` | Hệ thống nguồn Sales |
+| `Upstreams:ServiceSystem:BaseAddress` | `http://localhost:5102` | Hệ thống nguồn Service |
+| `Upstreams:CircuitBreakerMinimumThroughput` | `5` | Số lời gọi cần có trong cửa sổ lấy mẫu trước khi một breaker **được phép** mở |
+| `ConnectionStrings:Default` | *(không có)* | Database lúc runtime. Supabase: **transaction pooler**, cổng `6543` |
+| `ConnectionStrings:Migrations` | *(không có)* | Chỉ cho migration. Supabase: kết nối **direct/session**, cổng `5432` |
+| `HealthChecks:DatabaseTimeoutMs` | `5000` | Readiness chờ database bao lâu |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(không có)* | Set để export trace và metric; nếu không, chúng ra console |
+
+### IV.2.1 Kết nối một database
+
+Hai connection string, **vì chúng không thể thay thế cho nhau**: pooler chế độ
+transaction của Supabase (`6543`) là đúng cho runtime nhưng **không hỗ trợ** các tính
+năng mức session mà migration của EF Core cần, nên migration dùng kết nối trực tiếp
+(`5432`).
+
+Cấp chúng qua biến môi trường — **tuyệt đối không commit**:
+
+```bash
+export ConnectionStrings__Default='Host=…pooler.supabase.com;Port=6543;Database=postgres;Username=…;Password=…;Ssl Mode=Require'
+export ConnectionStrings__Migrations='Host=…pooler.supabase.com;Port=5432;Database=postgres;Username=…;Password=…;Ssl Mode=Require'
+
+dotnet tool restore
+dotnet ef database update \
+  --project src/DocumentViewer.Infrastructure \
+  --startup-project src/DocumentViewer.Api
+```
+
+Sau đó `/health/ready` trả `200`, và nhánh stale-cache fallback bên dưới **trở nên sống**.
+
+### IV.2.2 Chạy không có database
+
+**Được hỗ trợ, và là mặc định.** Không có connection string, service vẫn trả lời truy vấn
+tài liệu **y như cũ** — nó chỉ đơn giản là không có cache và không ghi audit trail, và
+`/health/ready` nói rõ điều đó trong khi **vẫn trả `200`**. Readiness nghĩa là *"tôi làm
+được việc của tôi"*, và không có cache thì nó vẫn làm được.
+
+---
+
+## IV.3. API
+
+```
+GET /api/v1/vehicles/{vin}/documents
+```
+
+| Kết cục | Status |
+|---|---|
+| Ít nhất một nguồn cho ra tài liệu (sống hoặc cache) | `200` — `partial: true` nếu có nguồn nào không phải `ok` |
+| VIN không hợp lệ (độ dài, ký tự `I`/`O`/`Q` bị cấm, check digit ISO 3779) | `400` + `ProblemDetails` |
+| Mọi nguồn đều lỗi và không có gì trong cache | `503` + `Retry-After: 30` |
+| VIN hợp lệ, không có tài liệu ở đâu cả | `200` với `documents: []` — **không phải** `404` |
+
+```json
+{
+  "vin": "1HGCM82633A004352",
+  "retrievedAt": "2026-10-31T07:42:11.183Z",
+  "partial": true,
+  "documents": [
+    {
+      "id": "service:91001",
+      "sourceSystem": "ServiceSystem",
+      "documentType": "JobCard",
+      "title": "Job card #91001 — annual service",
+      "issuedAt": "2026-03-15T00:00:00+00:00",
+      "sizeBytes": 148213,
+      "downloadUrl": "https://service.mock/docs/91001"
+    }
+  ],
+  "sources": [
+    { "system": "SalesSystem",   "status": "ok",     "documentCount": 4, "durationMs": 182 },
+    { "system": "ServiceSystem", "status": "stale",  "documentCount": 3, "durationMs": 5004,
+      "error": { "reason": "Timeout", "message": "…" } }
+  ]
+}
+```
+
+`status` là `ok` (sống), `stale` (nguồn lỗi; tài liệu từ cache được phục vụ thay thế) hoặc
+`failed` (nguồn lỗi và không có gì trong cache). Trả `200` cho kết quả một phần thay vì
+`5xx` là một **quyết định có chủ ý**, được biện giải ở §I.5.1.
+
+Health: `/health/live` (tiến trình) · `/health/ready` (database) · `/health/upstream`
+(tham khảo, không bao giờ fail). OpenAPI ở `/openapi/v1.json`; file
+[`openapi.json`](../openapi.json) đã commit là **hợp đồng cho client**.
+
+### IV.3.1 Bộ request mẫu
+
+[`requests.http`](../requests.http) phủ mọi đường đi; dưới đây là cùng các lời gọi đó bằng
+cURL:
+
+```bash
+BASE=http://localhost:5080
+VIN=1HGCM82633A004352
+
+# đường đi thuận lợi — cả hai nguồn
+curl -s "$BASE/api/v1/vehicles/$VIN/documents" | jq '{partial, count: (.documents|length), sources: [.sources[] | {system, status}]}'
+
+# VIN không hợp lệ (check digit bị sửa) -> 400
+curl -s -o /dev/null -w '%{http_code}\n' "$BASE/api/v1/vehicles/1HGCM82633A004353/documents"
+
+# VIN hợp lệ nhưng không có tài liệu -> 200 và danh sách rỗng
+curl -s "$BASE/api/v1/vehicles/WAUZZZ8V1JA003421/documents" | jq '.documents | length'
+
+# correlation: gửi id của chính mình và nhận lại đúng nó
+curl -s -D- -o /dev/null -H 'X-Correlation-Id: my-trace-123' "$BASE/api/v1/vehicles/$VIN/documents" | grep -i correlation
+```
+
+---
+
+## IV.4. Xem nó suy giảm
+
+Đây là **toàn bộ điểm chính** của scenario, nên nó là một tính năng hạng nhất chứ không
+phải thứ chỉ để mô tả bằng văn xuôi. Cả hai mock upstream đều expose một công tắc chaos.
+**Mọi con số dưới đây đều được ĐO, không phải ước lượng.**
+
+```bash
+BASE=http://localhost:5080
+VIN=1HGCM82633A004352
+show() { curl -s "$BASE/api/v1/vehicles/$VIN/documents" \
+  | jq -c '{partial, count:(.documents|length), sources:[.sources[]|{system,status,reason:.error.reason}]}'; }
+```
+
+**Một hệ thống chết — hệ thống kia vẫn chạy.**
+
+```bash
+curl -s -XPOST localhost:5102/admin/chaos -H 'content-type: application/json' -d '{"mode":"fail"}'
+show
+# 200 · partial: true · 4 tài liệu · Sales "ok", Service "failed" (HttpError)
+# Nếu có database kết nối, Service sẽ là "stale" và tài liệu cache của nó
+# được đưa vào, thành 7 tài liệu thay vì 4.
+```
+
+**Circuit breaker, nhìn thấy được.** Gọi tiếp và nguồn đang lỗi sẽ **không còn được liên
+hệ nữa**:
+
+```bash
+for i in 1 2 3 4 5 6; do show; done
+# lý do đổi từ "HttpError" sang "CircuitOpen", và các lời gọi đó trả về
+# trong vài milli giây — breaker đang từ chối tiêu 5 giây cho một hệ thống nó biết đã chết
+```
+
+**Cả hai hệ thống chết — giờ nó thành thật về việc thất bại.**
+
+```bash
+curl -s -XPOST localhost:5101/admin/chaos -H 'content-type: application/json' -d '{"mode":"fail"}'
+curl -s -o /dev/null -w '%{http_code} retry-after=%header{retry-after}\n' "$BASE/api/v1/vehicles/$VIN/documents"
+# 503 retry-after=30
+```
+
+**Chậm chứ không hỏng — ngân sách timeout giữ vững.** Phải reset trước và cho các breaker
+đủ 15 giây để đóng lại, không thì anh sẽ **đo breaker thay vì đo timeout**:
+
+```bash
+for p in 5101 5102; do curl -s -XPOST localhost:$p/admin/chaos -H 'content-type: application/json' -d '{"mode":"normal"}'; done
+sleep 16
+curl -s -XPOST localhost:5102/admin/chaos -H 'content-type: application/json' -d '{"mode":"slow","delayMs":8000}'
+time show
+# ~5,9 giây, không phải 8 · partial: true · Service "failed" (Timeout)
+# Ngân sách toàn request là 6 giây và nó giữ vững: một nguồn chậm không thể
+# giữ response quá mốc đó, và bốn tài liệu của Sales vẫn tới.
+```
+
+**Một bản ghi xấu không đầu độc cả nguồn.**
+
+```bash
+curl -s -XPOST localhost:5102/admin/chaos -H 'content-type: application/json' -d '{"mode":"normal"}'
+sleep 16
+curl -s -XPOST localhost:5102/admin/chaos -H 'content-type: application/json' -d '{"mode":"garbage"}'
+show
+# 200 · partial: false · Service "ok" với 0 tài liệu
+```
+
+`garbage` trả về JSON **đúng cú pháp** nhưng bản ghi của nó **thiếu tiêu đề**. Normaliser
+bỏ qua bản ghi đó và nguồn **vẫn báo `ok`** — đây là [giả định #7](#i10-các-giả-định): một
+bản ghi không dùng được **không phải lý do** để làm thất bại cả một hệ thống nguồn. JSON
+**thực sự không parse được** là một kết cục khác (`InvalidPayload`) và được phủ bởi test
+`Malformed_upstream_payload_reports_InvalidPayload_not_500`.
+
+```bash
+# trả mọi thứ về bình thường
+for p in 5101 5102; do curl -s -XPOST localhost:$p/admin/chaos -H 'content-type: application/json' -d '{"mode":"normal"}'; done
+```
+
+`mode` nhận `normal`, `slow` (kèm `delayMs`), `fail` (`503`) hoặc `garbage`.
+
+> **Ghi chú của người dịch:** mục này từng là nguồn của defect **I-13** — bản nháp đầu
+> tiên được viết từ *ý định thiết kế* chứ không phải từ *đầu ra đo được*, và khi chạy thật
+> thì ra `0,04s` + `CircuitOpen` thay vì `~5s`, còn bước `garbage` báo `ok` chứ không phải
+> `InvalidPayload`. Xem §V.I-13.
+
+---
+
+## IV.5. Bộ test
+
+```bash
+dotnet test                                                   # tất cả
+dotnet test tests/DocumentViewer.UnitTests                    # 65, ~5 giây
+dotnet test tests/DocumentViewer.IntegrationTests             # 43, ~2 phút 45
+dotnet test --filter FullyQualifiedName~Resilience            # các luật độ tin cậy
+```
+
+| Nhóm | Số lượng | Nó ghim điều gì |
+|---|---|---|
+| `VinTests` | 13 | Độ dài, ký tự `I`/`O`/`Q` bị cấm, check digit ISO 3779 (gồm cả nhánh `X` khi số dư là 10), đầu vào có khoảng trắng và chữ thường, và việc **một `Vin` không thể bị format thô vào một dòng log** |
+| Normaliser | 18 | Kilobyte so với byte, epoch-millis so với ISO date, URL lồng so với phẳng, giá trị enum lạ **được giữ** thay vì bị bỏ, bản ghi lỗi định dạng **bị bỏ qua** thay vì throw, và một kích thước quá lớn để biểu diễn được báo là **không biết** thay vì thành số âm |
+| `DocumentSourceClientTests` | 12 | Mọi thất bại upstream map sang đúng `UpstreamFailureReason`, và response body **bị giới hạn cả về kích thước lẫn thời gian** |
+| `NpgsqlConnectionHardeningTests` | 8 | Các mặc định về giữ pool ấm và connect-timeout được áp dụng, và **không bao giờ ghi đè** giá trị người vận hành đã set |
+| `DocumentAggregationServiceTests` | 14 | Merge, sắp xếp với null xuống cuối, cờ partial, stale fallback, **một source throw không làm mất kết quả của source song song**, tính song song, lệnh ghi cache sống lâu hơn request, và một database bị treo **không thể** ném đi tài liệu của một nguồn khỏe mạnh |
+| `VehicleDocumentsEndpointTests` | 9 | Map status và `ProblemDetails` |
+| Persistence | 12 | Round-trip, hết hạn, upsert đồng thời, audit, và việc một database không với tới được hoặc vắng mặt **không bao giờ** làm vỡ một lệnh đọc |
+| `ObservabilityTests` | 10 | Truyền correlation, **hai span upstream chồng lấn**, không VIN thô trong bất kỳ dòng log nào, ngữ nghĩa health-check, client hủy request, và một guard rằng các stub **thực sự trả về tài liệu** |
+| `UpstreamResilienceTests` | 10 | Các luật độ tin cậy ở bảng dưới |
+| `TimeoutAccountingTests` | 1 | Một timeout toàn request **được đếm và được ghi audit** — đúng cái kết cục mà người dùng không nhận được gì lại là cái cần ghi lại nhất |
+| `OpenApiContractTests` | 1 | Mọi property mà hợp đồng đã commit đánh dấu `required` đều **thực sự có** trong một response thật |
+
+**Ba điều về bộ test này là có chủ ý và đáng để người review chú ý:**
+
+**Test về tính song song thực sự ĐO.** Yêu cầu #2 nói backend phải gọi cả hai hệ thống
+song song. **Không có gì ngoài một cái đồng hồ chứng minh được điều đó**, nên cả hai stub
+đều delay một giây và toàn request phải xong trong **dưới 1,6 giây** — gọi tuần tự sẽ mất
+ít nhất hai giây.
+
+**Các test database trỏ vào một hố đen.** Một cổng đóng bị từ chối ngay lập tức, nên nó
+**không chứng minh được gì** về timeout. Các test này trỏ database vào một `TcpListener`
+**nhận kết nối rồi không bao giờ trả lời** — đó mới là hình ảnh của một managed pooler
+đang lạnh, nhìn từ phía client.
+
+**Integration collection KHÔNG chạy song song.** Có năm test khẳng định về thời gian trôi
+qua. Khi chạy cùng các test class khác, tranh chấp CPU đã đẩy một upstream **cố ý khỏe
+mạnh** vượt quá timeout 2 giây mỗi lần thử, và bộ test fail trên một `503` **hoàn toàn
+đúng**. Khẳng định về độ trễ và chạy song song **không đi cùng nhau được**;
+`xunit.runner.json` tắt nó đi.
+
+### IV.5.1 Các luật độ tin cậy, và test giữ từng luật
+
+| Luật | Giá trị | Test |
+|---|---|---|
+| Timeout mỗi lần thử | 2 s | `One_upstream_timing_out_returns_200_partial_within_the_total_budget` |
+| Tổng mỗi upstream | 5 s | như trên |
+| Toàn request | 6 s | như trên |
+| Retry, chỉ lỗi tạm thời | 2 lần, lũy thừa + jitter | `Transient_500_is_retried_and_succeeds_on_the_second_attempt` |
+| Không bao giờ retry `4xx` khác | — | `Client_error_responses_are_never_retried(404, 400)` |
+| Circuit breaker, mỗi upstream một cái | tỉ lệ 0,5 / 30 s / 15 s | `Repeated_failures_open_the_circuit_and_subsequent_calls_fail_fast` |
+| Các breaker bị cô lập với nhau | — | `Open_circuit_on_one_source_does_not_affect_the_other_source` |
+| Giới hạn kích thước body upstream | 4 MiB | `Reports_a_body_that_never_stops_arriving_as_an_invalid_payload` |
+| Ngân sách đọc body upstream | 2 s | `Reports_a_body_that_trickles_past_its_budget_as_a_timeout` |
+| TTL của cache | 15 phút | `Get_returns_null_for_expired_entry` |
+| Thất bại không bao giờ được cache | — | `Failed_source_results_are_never_written_to_cache` |
+
+---
+
+## IV.6. Observability
+
+Serilog ghi JSON có cấu trúc ra stdout. Mỗi dòng thuộc phạm vi một request đều mang
+`CorrelationId` và `TraceId`, và nơi nào liên quan thì mang `SourceSystem` cùng `VinHash`.
+(Các dòng lúc khởi động, warm-up pool và ghi audit nền **không thuộc về request nào** nên
+không mang cả hai.)
+
+**VIN được coi là dữ liệu cá nhân.** **Không dòng log nào chứa một VIN.** Log mang
+`VinHash` (12 hex đầu của SHA-256) cộng sáu ký tự cuối — đủ để bộ phận hỗ trợ đối chiếu
+một khiếu nại mà không biến kho log thành kho PII. VIN đầy đủ **chỉ** tồn tại trong bảng
+`search_audit`, nằm sau kiểm soát truy cập của database. `Vin.ToString()` trả về **dạng
+đã che**, nên một lần lỡ nội suy chuỗi không thể làm lộ nó, và có một test khẳng định
+không dòng log nào chứa VIN thô **kể cả trên nhánh suy giảm** — nơi đã từng phát hiện một
+logger retry của thư viện thứ ba làm lộ nó **bên trong một object `Uri`**.
+
+OpenTelemetry export trace và metric; một request sinh ra một span cha với **hai span
+upstream ngang hàng** có khoảng thời gian chồng lấn, đó là bằng chứng rõ ràng nhất có thể
+có rằng fan-out là thật:
+
+![Parallel upstream fan-out trace waterfall](images/trace-parallel-fanout.png)
+
+Sáu metric dưới meter `DocumentViewer`: thời lượng tổng hợp, thời lượng và kết quả upstream
+theo từng hệ thống, số lượng response một phần, kết cục tra cache, và trạng thái circuit.
+Bộ đếm response-một-phần là cái mà **một hiện thực ngây thơ không thể sinh ra được** — nó
+chỉ đo được vì kết quả một phần **được mô hình hóa** chứ không bị ném đi.
+
+---
+
+## IV.7. Tường thuật cộng tác với AI
+
+**GenAI viết phần lớn code trong repo này.** Câu hỏi thú vị **không phải** là nó có làm
+được hay không — nó làm được — mà là **người kỹ sư điều khiển nó có phân biệt được đầu ra
+ĐÚNG với đầu ra NGHE CÓ LÝ hay không**. Dưới đây là bản ghi trung thực, bao gồm cả những
+chỗ AI sai và cách những chỗ đó bị bắt.
+
+Bản ghi đầy đủ ở **Phần V, VI và VII** của tài liệu này.
+
+### IV.7.1 Chiến lược: không bao giờ hỏi code trước
+
+Mỗi giai đoạn yêu cầu mô hình **trích xuất**, **chấm điểm**, **tấn công**, hoặc **biện
+giải** — và chỉ sau đó mới **sản xuất**. Code sinh ra trước khi bài toán được chốt là code
+sẽ phải ném đi.
+
+1. **Trích xuất, không diễn giải.** Phân tích đề bài thành các yêu cầu, giữ **tách biệt**
+   tiêu chí nghiệm thu của từng scenario với các yêu cầu xuyên suốt trong "The Challenge
+   Structure". Chính sự tách biệt đó làm cho bước 3 trở nên khả thi.
+2. **Chấm điểm các phương án theo một rubric tường minh** — độ phức tạp hiện thực, nguy cơ
+   phình phạm vi, và mỗi scenario để lại bao nhiêu chất liệu cho một tài liệu thiết kế.
+   Scenario A có độ sâu kỹ thuật hơn, nhưng bài toán concurrency của nó **rất dễ ship sai
+   một cách tinh vi**; còn các lo ngại về độ tin cậy của Scenario D là **nội tại** chứ
+   không phải gắn thêm vào.
+3. **Tấn công chính lựa chọn của mình.** *"Đọc lại Phần 2 theo kiểu đối kháng. Scenario D
+   KHÔNG thỏa mãn được điều gì về mặt cấu tạo?"* Prompt này sinh ra **phát hiện giá trị
+   nhất của cả giai đoạn thiết kế**: một database bền vững là **bắt buộc** cho bài nộp
+   backend, mà Scenario D lại là tổng hợp chỉ-đọc thuần **không sinh ra dữ liệu của riêng
+   nó**. Nó định hình lại thiết kế và trở thành giả định #1.
+4. **Tấn công chính thiết kế của mình.** *"Đây là thiết kế fan-out. Tìm bug."* → ra defect
+   `Task.WhenAll` đã nói ở trên.
+5. **Biện giải mọi công nghệ, kể cả những cái bị loại.** Việc **bắt buộc** phải nêu một
+   phương án bị loại cho **từng dòng** của bảng công nghệ là thứ làm lộ ra vấn đề licence
+   của FluentAssertions và câu hỏi integration test nên trỏ vào đâu.
+6. **Tài liệu thiết kế, rồi plan, rồi mới code.** Mô hình hiện thực **dựa trên một đặc tả
+   và một plan theo từng task mà tôi sở hữu**, thay vì tự bịa ra trong lúc làm. Mọi task
+   đều test-first, với test đỏ **được xem thấy** trước khi phần hiện thực tồn tại.
+
+### IV.7.2 Kiểm chứng: đầu ra của AI thực sự được kiểm thế nào
+
+- **Mọi task đều chạy đỏ-sang-xanh.** Một test xanh ngay khoảnh khắc nó được viết ra
+  **không chứng minh được gì**.
+- **Bộ test được chạy đối chiếu với THỰC TẾ, không chỉ đối chiếu với chính nó.** Đây là
+  nơi những phát hiện nghiêm trọng xuất hiện — xem §IV.7.3.
+- **Mọi test đều bị chất vấn bằng một câu hỏi: *thay đổi gì ở production sẽ làm test này
+  fail?*** Một test readiness **không trả lời được** và đã bị viết lại (I-9).
+- **Mọi lệch khỏi plan đều được ghi thành phán quyết**, kèm giá phải trả nếu nó sai, trong
+  sổ ở **Phần VII**.
+
+### IV.7.3 AI đã sai những gì
+
+Một tuyển chọn tiêu biểu; danh sách đầy đủ ở **Phần V** (D-1…D-7 giai đoạn thiết kế,
+I-1…I-15 giai đoạn hiện thực).
+
+| # | AI sinh ra gì | Đã đổi thành gì | Vì sao nó quan trọng |
+|---|---|---|---|
+| D-3 | `await Task.WhenAll(sales, service)` | `UpstreamResult<T>`; thất bại thành một giá trị trả về | Ném lại lỗi đầu tiên và **ném đi kết quả đã hoàn thành của task song song** — phá vỡ kết quả một phần, và **chỉ phá khi một upstream chết** |
+| D-4 | FluentAssertions trong test stack | Shouldly | FluentAssertions v8 không còn miễn phí cho mục đích thương mại. **Một dependency không thể ship được thì không phải là dependency** |
+| D-5 | Một `5xx`/`207` cho kết quả một phần | `200` + `partial` + `sources[]` theo từng nguồn | Nhiều client **bỏ luôn body khi nhận `5xx`**, ném đi chính những tài liệu mà service đã lấy được thành công |
+| I-1 | `dotnet add package … --no-restore`, để lại `Version="*"` trôi nổi | Ghim phiên bản `9.0.*` | Một wildcard đã phân giải ra một package **chỉ dành cho `net10.0`** và làm vỡ build; nó cũng làm build không tái lập được |
+| I-3 | `AddHttpClient<IDocumentSource, T>()` với mặc định của `AddStandardResilienceHandler()` | Đặt tên cho từng pipeline; `Retry.Delay` 200 ms; breaker throughput cấu hình được | Registration không tên khóa **cả hai** client dưới `IDocumentSource`, dùng chung **một base address và một circuit breaker** — phá hủy chính sự cô lập theo upstream mà thiết kế đặt lên. Mặc định retry delay 2 giây còn làm lần retry thứ hai **không thể xảy ra** trong ngân sách 5 giây |
+| I-6 | Chỉ log `VinHash`, với một Serilog enricher làm sạch các property dạng string | Enricher được mở rộng để **đệ quy** qua `ScalarValue`/`StructureValue`/`SequenceValue`/`DictionaryValue`, cộng một span processor tương ứng | Logger retry của Polly lưu URL gửi đi dưới dạng **object `Uri`**, không phải string, nên VIN thô **lọt vào log** — **trên nhánh suy giảm**, tức đúng lúc người ta đi đọc log |
+| I-8 | Một hiện thực hoàn chỉnh, toàn xanh, 73 test | Warm-up pool; tách lệnh ghi khỏi token của request; ngân sách readiness thực thi bằng cách đua | Đối chiếu với **Supabase thật**, nhánh stale-cache **đã chết** và readiness trả `503`. Lệnh ghi cache chạy trên cancellation token của request, mà token đó bị hủy ngay khi response được gửi, nên **không có gì từng được cache**. Testcontainers kết nối trong dưới một milli giây, nên **không test nào có thể thấy được** |
+| I-9 | Một test readiness trỏ vào một cổng đóng | Một `TcpListener` hố đen, cộng một test với ngân sách rộng rãi | Test đó **xanh cả trước VÀ sau** bản fix. **Một test không thể fail còn tệ hơn là không có test**: nó báo cáo một sự an toàn mà nó chưa từng kiểm tra |
+| I-11 | `AddDocumentSources` đọc `Upstreams:*:BaseAddress` lúc đăng ký | Phân giải từ `IServiceProvider` cho mỗi client | Nó chụp lại `appsettings.json` và **âm thầm phớt lờ mọi nguồn cấu hình sau đó** — nên một lần triển khai đặt địa chỉ upstream qua biến môi trường sẽ bị bỏ qua |
+
+### IV.7.4 Bài học đáng giữ lại
+
+**Một bộ test toàn xanh chỉ mô tả cái môi trường mà bộ test đó đang chạy trong đó.** Bảy
+mươi ba test đã xanh, endpoint demo đúng, và **tính năng tiêu biểu nhất của scenario đã
+chết ở production**, bởi vì PostgreSQL trong một container cục bộ trả lời trong dưới một
+milli giây, còn một managed pooler liên vùng thì không. Phát hiện I-8 đến từ việc **chạy
+thứ này đối chiếu với hạ tầng thật và đọc log** — không phải từ việc viết thêm test. Những
+test được viết **sau đó** giữ cho nó không hồi quy; chúng **không thể** tìm ra nó.
+
+Hệ quả là cách AI được dùng tốt nhất: **không phải như một cái máy sinh code để rồi đi
+review diff, mà như một đối thủ được chỉ thẳng vào chính các quyết định của mình**, với
+mọi câu trả lời được kiểm chứng đối chiếu với một thứ gì đó thật.
+
+---
+
+## IV.8. Những gì cố ý không làm
+
+Là **lựa chọn, không phải thiếu sót** — mỗi thứ kèm lý lẽ ở §I.9: xác thực và phân quyền
+(thuộc về gateway), tải nội dung tài liệu (một bài toán khác với đặc tính bảo mật khác),
+phân trang (hàng chục tài liệu mỗi xe, không phải hàng nghìn), loại trùng giữa các nguồn
+(một tài liệu ở cả hai hệ thống **thực sự là** hai bản ghi, và yêu cầu #3 đòi mỗi cái phải
+rõ nguồn), và frontend (đề bài yêu cầu một tầng, và yêu cầu #2 gọi tên backend).
+
+---
+---
+
+# PHẦN V — NHẬT KÝ REVIEW AI
+
+Bản ghi chạy liên tục về **GenAI đề xuất gì, đã làm gì với đề xuất đó, và vì sao**. Các
+entry được thêm vào **TRONG LÚC** công việc diễn ra, không phải dựng lại sau — điểm chính
+của nhật ký này là **làm bằng chứng**, và bằng chứng viết lại từ ký ức vào lúc cuối thì
+không phải bằng chứng.
+
+Mỗi entry trả lời ba câu hỏi: **mô hình sinh ra gì**, **tôi đã làm gì với nó**, và **điều
+gì sẽ xảy ra sai nếu tôi chỉ đơn giản chấp nhận nó**.
+
+> **Ghi chú của người dịch:** bản gốc trình bày các entry giai đoạn hiện thực dưới dạng
+> một bảng với các ô rất dài. Ở đây em chuyển thành từng mục nhỏ cho dễ đọc, và **sắp theo
+> thứ tự số I-1 → I-15** (bản gốc xếp theo thứ tự chúng được thêm vào, nên I-8 nằm trước
+> I-1). Nội dung không thay đổi.
+
+---
+
+## V.A. Giai đoạn thiết kế — 2026-10-29
+
+### D-1 · Chọn scenario bằng cách chấm điểm theo một rubric tường minh
+
+**Đề xuất.** Cho đề bài, mô hình chấm điểm cả bốn scenario theo độ phức tạp hiện thực,
+nguy cơ phình phạm vi, và mỗi cái để lại bao nhiêu chất liệu cho tài liệu thiết kế. Nó xếp
+Scenario D thứ nhất về **tín hiệu trên mỗi đơn vị công sức** và khuyên không chọn
+Scenario A.
+
+**Quyết định.** **Chấp nhận**, nhưng là chấp nhận sau khi kiểm tra **lý lẽ**, không phải
+kiểm tra thứ hạng. Scenario A đạt điểm cao nhất về độ sâu kỹ thuật — booking với tài nguyên
+giới hạn là một bài toán concurrency thực sự — nhưng nó cũng là chỗ mà **một giải pháp sai
+tinh vi rất dễ ship và chắc chắn sẽ bị chọc vào**. Các lo ngại về độ tin cậy của Scenario D
+là **nội tại** của bài toán chứ không phải gắn thêm vào, mà đó mới đúng là điều mà cụm từ
+"scalability, performance, reliability, maintainability, observability" của đề bài đang
+hỏi tới.
+
+**Nếu chấp nhận một cách mù quáng.** Ở đây thì ít hại — nhưng **chính cái rubric mới là
+đầu ra giá trị, không phải câu trả lời**. Có thể nói ra được **vì sao** chọn D thay vì A
+chính là điều mà tiêu chí đánh giá thứ nhất đang hỏi.
+
+---
+
+### D-2 · Một yêu cầu bắt buộc mà Scenario D không tự nhiên thỏa mãn
+
+**Đề xuất.** Mô hình được yêu cầu đọc lại Phần 2 của đề bài **theo kiểu đối kháng** và báo
+cáo bất cứ yêu cầu nào mà Scenario D **không thỏa mãn về mặt cấu tạo**. Nó tìm ra rằng
+*"Nếu bạn chọn Backend: Expose một RESTful API và **dùng một database bền vững**"* là
+**bắt buộc**, trong khi Scenario D là tổng hợp chỉ-đọc thuần, **không sinh ra dữ liệu của
+riêng nó**.
+
+**Quyết định.** **Chấp nhận phát hiện; nhưng quyết định thiết kế là của tôi.** Thay vì
+thêm một bảng cho đủ ô tick, hai bảng được chọn mà mỗi bảng trả lời một câu hỏi vận hành
+thật: `search_audit` (ai đã truy cập tài liệu của xe nào, và họ có nhận được câu trả lời
+đầy đủ — **truy cập có thể kiểm toán là một kỳ vọng thật** trong bán lẻ ô tô) và
+`document_metadata_cache` (thứ làm cho hành vi stale-fallback ở §I.4.3 **khả thi ngay từ
+đầu**). Được ghi lại thành giả định #1 trong tài liệu thiết kế.
+
+**Nếu chấp nhận mù quáng — hoặc bỏ sót.** Nộp một backend **không có database** sẽ **fail
+một yêu cầu tường minh** của đề bài. Đây là **thứ giá trị nhất mà AI đóng góp** trong giai
+đoạn thiết kế.
+
+---
+
+### D-3 · `Task.WhenAll` âm thầm phá hủy kết quả một phần
+
+**Đề xuất.** Bản nháp thiết kế fan-out được đưa lại cho mô hình kèm một chỉ thị duy nhất:
+**tìm chế độ lỗi**. Nó phát hiện rằng `await Task.WhenAll(sales, service)` ném lại exception
+của task fault đầu tiên và **ném đi kết quả đã hoàn thành của task song song**.
+
+**Quyết định.** Chấp nhận và thiết kế vòng quanh nó. Mọi lời gọi source đều được bọc để
+thất bại là một **giá trị trả về**, không phải exception (`UpstreamResult<T>` với hai nhánh
+`Ok` / `Failed`); `IDocumentSource.FetchAsync` bắt exception tại biên của chính nó. Với
+thiết kế đó, `Task.WhenAll` **không thể throw** và bộ tổng hợp luôn nhận đúng một kết cục
+cho mỗi nguồn. Hai test ghim nó: một test source trả về `Failed`, và một test source
+**throw dù hợp đồng không cho phép**.
+
+**Nếu chấp nhận mù quáng.** Bug **chỉ xuất hiện khi một upstream chết** — nghĩa là **không
+bao giờ trong lúc demo và luôn luôn ở production**. Nó sẽ phá vỡ tiêu chí nghiệm thu #3
+(danh sách hợp nhất) và làm metric tiêu biểu `response.partial` **trở nên không đo được**.
+
+---
+
+### D-4 · Một dependency có licence không thể ship
+
+**Đề xuất.** Gợi ý test stack đầu tiên của mô hình có FluentAssertions.
+
+**Quyết định.** **Từ chối** và thay bằng Shouldly. FluentAssertions v8 chuyển sang licence
+thương mại; **một test dependency mà một công ty không thể hợp pháp dùng trong sản phẩm
+thương mại thì không phải là một dependency dùng được**, dù nó quen tay đến mấy.
+
+**Nếu chấp nhận mù quáng.** Một vấn đề licence trong bài nộp cho **một nhà tuyển dụng
+thương mại** — một ấn tượng đầu tiên xấu mà **chẳng liên quan gì tới năng lực kỹ thuật**.
+
+---
+
+### D-5 · Status code cho một kết quả một phần
+
+**Đề xuất.** Ban đầu mô hình với tay tới một response kiểu `5xx`/`207` khi một upstream
+lỗi.
+
+**Quyết định.** **Từ chối.** Endpoint trả `200` với `partial: true` và một báo cáo
+`sources[]` theo từng nguồn; **chỉ** trường hợp tất cả nguồn đều lỗi mới trả `503`. Lý lẽ:
+mục tiêu của người dùng là thấy những tài liệu **đang có**, và **nhiều HTTP client bỏ luôn
+response body khi nhận `5xx`** — một lựa chọn status code sẽ ném đi chính dữ liệu mà
+service đã lấy được thành công. `207 Multi-Status` là một ngữ nghĩa của WebDAV về kết cục
+**theo từng tài nguyên** và nó **không mô tả đúng** tình huống này; khối `sources[]` mang
+thông tin đó mà **không lạm dụng một status code**. Ghi lại thành giả định #2.
+
+**Nếu chấp nhận mù quáng.** Client sẽ **không có cách nào an toàn** để render một câu trả
+lời suy giảm, mà đó lại chính là **hành vi duy nhất mà scenario này tồn tại để trình diễn**.
+
+---
+
+### D-6 · Chọn database, và test nên trỏ vào đâu
+
+**Đề xuất.** Mô hình đưa ra đánh đổi Postgres-so-với-SQLite: SQLite chạy mọi nơi không cần
+Docker, Postgres giữ câu chuyện index và concurrency đáng tin.
+
+**Quyết định.** **Supabase PostgreSQL cho ứng dụng đang chạy** — có quản lý, Postgres
+thật, không phải cài gì cục bộ. Nhưng **integration test trỏ vào một Postgres CỤC BỘ** qua
+Testcontainers, **không trỏ vào Supabase**: test phụ thuộc mạng và phụ thuộc state remote
+dùng chung thì **flaky, chậm, và có khả năng làm hỏng chính dữ liệu đang dùng cho video
+demo**. Cùng một provider Npgsql ở cả hai nơi, nên không có phân kỳ hành vi. Hai hệ quả
+thực tiễn được ghi vào plan: migration **phải** dùng kết nối trực tiếp của Supabase (5432)
+vì pooler chế độ transaction (6543) không hỗ trợ tính năng mức session, và **không
+connection string nào được commit**.
+
+**Nếu chấp nhận mù quáng.** Trỏ bộ test vào Supabase sẽ tạo ra một build **đỏ bất thường
+từng lúc** — **thứ tệ nhất có thể đưa cho một người review**.
+
+---
+
+### D-7 · Nơi AI không được cấp quyền gì
+
+**Cố ý KHÔNG** giao phó, và được ghi lại kèm lý lẽ trong tài liệu thiết kế để người review
+có thể tranh luận với **lập luận** thay vì với **đầu ra**: hợp đồng API và ngữ nghĩa status
+code của nó (§I.5.1), ngân sách timeout (§I.8.1), việc coi VIN là dữ liệu cá nhân và hash
+nó trong log (§I.7.1), việc loại upstream khỏi `/health/ready` (§I.7.4), và **mọi dòng
+trong bảng giả định** (§I.10).
+
+---
+
+## V.B. Giai đoạn hiện thực
+
+Được điền vào trong lúc Task 1–8 được thực thi. Định dạng: mô hình sinh ra gì, đã đổi gì,
+vì sao nó quan trọng. **Một dòng cho mỗi defect THẬT** — một mục trống còn tốt hơn một mục
+bị nhồi cho dày.
+
+---
+
+### I-1 · Task 1 — Phiên bản package trôi nổi
+
+**AI sinh ra.** Script scaffolding chạy
+`dotnet add package Microsoft.AspNetCore.Mvc.Testing --no-restore`, ghi `Version="*"` trôi
+nổi vào `.csproj` và phân giải ra `10.0.14` (**chỉ dành cho `net10.0`**), làm restore thất
+bại với `NU1202` và `NU1604` dưới `TreatWarningsAsErrors`.
+
+**Đã đổi.** Bỏ `--no-restore` / phiên bản wildcard và **ghim** các phiên bản package tất
+định tương thích `.NET 9` (`9.0.*` cho `Microsoft.AspNetCore.*` / `EF Core`, phiên bản
+tường minh cho `Shouldly` và `NSubstitute`). Cũng ghi chú cho §I.6 rằng chuyển sang
+`.NET 10 LTS` chỉ đổi `TargetFramework` **một lần** trong `Directory.Build.props` cộng
+với việc ghim lại package `9.x` theo framework.
+
+**Vì sao quan trọng.** Phiên bản `*` trôi nổi **phá vỡ build tái lập được**
+(`TreatWarningsAsErrors` từ chối `NU1604`) và kéo về các package **sai major version ngay
+khoảnh khắc** một bản .NET major mới lên NuGet.
+
+---
+
+### I-2 · Task 1 & 2 — Đếm sai test và một VIN sai check digit
+
+**AI sinh ra.** Plan do AI sinh ra có đặc tả validate check digit ISO 3779 trong
+`Vin.TryParse`, nhưng **đếm 12 unit test thành 13** trong khi **bỏ sót nhánh
+`mod 11 == 10 → 'X'`**, và chọn VIN Audi châu Âu `WAUZZZ8V7JA003421` ở Task 2 cho test
+case `200 OK` không-có-tài-liệu.
+
+**Đã đổi.** Thêm `1M8GDM9AXKP042788` (check digit `X`, số dư 10) làm test case thứ 13 của
+`VinTests`, và **tự tính tổng có trọng số ISO 3779** cho `WAUZZZ8V7JA003421`
+(`309 ≡ 1 mod 11`, **không phải `7`**), thay VIN seed rỗng bằng `WAUZZZ8V1JA003421` hợp lệ
+(và giữ `WAUZZZ8V7JA003421` chỉ như một ghi chú cảnh báo).
+
+**Vì sao quan trọng.** Các VIN đệm kiểu `WAUZZZ` của châu Âu **không thực thi check digit
+Bắc Mỹ**; dùng `WAUZZZ8V7JA003421` cho tình huống kết quả rỗng sẽ **fail ở validate biên
+với `400 InvalidCheckDigit`** thay vì test được `200` + `documents: []`.
+
+---
+
+### I-3 · Task 3 — Ba cái bẫy im lặng trong mặc định của Polly v8
+
+**AI sinh ra.** `AddHttpClient<IDocumentSource, TClient>()` + mặc định của
+`AddStandardResilienceHandler()` trong .NET / Polly v8 mang theo **ba cái bẫy im lặng**:
+
+1. Bỏ qua `name` tường minh của client khiến **cả hai** registration bị khóa dưới
+   `"IDocumentSource"`, **dùng chung một `BaseAddress` và một circuit breaker**;
+2. Mặc định `Retry.Delay = 2s` cộng `AttemptTimeout = 2s` **vượt** `TotalRequestTimeout =
+   5s` **trước khi** lần retry thứ hai có thể chạy;
+3. Mặc định `CircuitBreaker.MinimumThroughput = 100` **không bao giờ trip** dưới lưu lượng
+   burst vừa phải hay trong integration test.
+
+**Đã đổi.** Đặt tên hai pipeline `IHttpClientFactory` là `"SalesSystem"` và
+`"ServiceSystem"`, set `Retry.Delay = 200ms` (lũy thừa + jitter), và làm
+`CircuitBreaker.MinimumThroughput` cấu hình được (mặc định `5`).
+
+**Vì sao quan trọng.** Giữ được **sự cô lập lỗi theo từng upstream thực sự** (§I.2 nguyên
+tắc 3) và làm cho ngân sách retry + breaker **nhất quán về mặt toán học** với hệ phân cấp
+timeout 2s / 5s / 6s.
+
+---
+
+### I-4 · Task 5 — Shouldly so sánh chuỗi không phân biệt hoa thường theo mặc định
+
+**AI sinh ra.** Trong `Response_body_never_contains_a_lowercase_or_untrimmed_vin`, code
+test được sinh ra gọi `raw.ShouldNotContain("1hgcm82633a004352")`, **giả định** ngữ nghĩa
+phân biệt hoa thường của `string.Contains` / FluentAssertions. `ShouldContain` /
+`ShouldNotContain` của Shouldly **mặc định là `Case.Insensitive`**, nên nó khớp với chuỗi
+đã chuẩn hóa đúng `"1HGCM82633A004352"` và **fail**.
+
+**Đã đổi.** Truyền `Case.Sensitive` tường minh (`ShouldNotContain(..., Case.Sensitive)`)
+và kiểm tra cả khoảng trắng chưa trim.
+
+**Vì sao quan trọng.** Hệ quả trực tiếp của việc chuyển từ FluentAssertions sang Shouldly
+(D-4); nó cũng **ngăn các khẳng định xanh-giả về hoa thường** (`ShouldContain` khớp với
+đầu ra sai hoa thường).
+
+---
+
+### I-5 · Task 6 — Ba điểm tinh vi của tầng persistence
+
+**AI sinh ra.** Ba điểm tinh vi lộ ra khi đối chiếu với bản nháp plan/spec:
+
+1. §I.8.4 vẽ `search_audit.correlation_id` là `uuid`, trong khi §I.7.1 **nhận chuỗi
+   `X-Correlation-Id` bất kỳ** và `TraceId` W3C dạng 32-hex;
+2. `AddDbContext` theo phạm vi request tiêu chuẩn **fail khi `UpsertAsync` gọi đồng thời**
+   (`"A second operation was started on this context instance"`) và throw
+   `ObjectDisposedException` bên trong các lệnh ghi audit fire-and-forget trong `Task.Run`
+   **sau khi** HTTP response hoàn tất (**âm thầm làm mất mọi dòng audit** sau `try/catch`);
+3. Rẽ nhánh theo `builder.Configuration.GetConnectionString("Default")` **trước**
+   `builder.Build()` sẽ **phớt lờ** các override của
+   `WebApplicationFactory.ConfigureAppConfiguration`, làm `DatabaseOutageTests` chạm vào
+   một repository no-op thay vì một DB bị hỏng.
+
+**Đã đổi.** Map `correlation_id` thành `varchar(128)`, chuyển sang
+`AddDbContextFactory<DocumentViewerDbContext>` với việc tạo `DbContext` **cho mỗi thao
+tác**, phân giải `IConfiguration` **lười (lazily)** bên trong các delegate factory của DI,
+và khẳng định `ShouldBeOfType<DocumentCacheRepository>()` trong `DatabaseOutageTests`.
+
+**Vì sao quan trọng.** Giữ cho các correlation ID **không-phải-UUID** vẫn hợp lệ, làm cho
+upsert đồng thời và ghi audit fire-and-forget **an toàn ở production**, và **ngăn một
+integration test về sự cố database bị xanh-giả**.
+
+---
+
+### I-6 · Task 7 — VIN lọt vào log qua một object `Uri`
+
+**AI sinh ra.** Dù các logger của ứng dụng đã chỉ log `VinHash` / `VinMasked` và một
+Serilog enricher đã làm sạch các property dạng string (sửa được scope `RequestPath` ngầm
+của `Microsoft.AspNetCore.Hosting`), test `No_log_line_contains_the_raw_vin` **vẫn fail**
+trên một lời gọi upstream suy giảm `503`, bởi vì `Microsoft.Extensions.Http.Resilience`
+(logger execution-attempt của Polly) **lưu URL gửi đi dưới dạng một `ScalarValue` bọc một
+object `System.Uri`** chứ không phải `string`, **làm lộ VIN thô vào `@m`**. Riêng việc
+khác: `OpenTelemetry.* 1.11.2` do mô hình gợi ý **fail restore** dưới
+`TreatWarningsAsErrors` với cảnh báo bảo mật `NU1902`.
+
+**Đã đổi.** Mở rộng `VinRedactingLogEnricher` để **đệ quy** làm sạch `ScalarValue`
+(`string` **và** `Uri`), `StructureValue`, `SequenceValue`, và `DictionaryValue` (cộng một
+`BaseProcessor<Activity>` tương ứng cho tag URL của span OpenTelemetry), truyền
+`preserveStaticLogger: true` vào `UseSerilog` để cô lập test song song, và nâng
+`OpenTelemetry.*` lên bản đã vá `1.20.1`.
+
+**Vì sao quan trọng.** **Ngăn một vụ rò rỉ PII âm thầm** vào JSON log ở production trong
+lúc upstream retry — tức **đúng cái nhánh degraded-mode mà log cảnh báo của Polly phát ra**
+— và giữ cho cây dependency sạch khỏi các CVE đã biết.
+
+---
+
+### I-7 · Task 7 — Hai lệnh ghi cache bị tuần tự hóa, phát hiện từ waterfall của chính mình
+
+**AI sinh ra.** Khi kiểm tra ảnh chụp waterfall Jaeger **thật** đầu tiên đối chiếu với
+Supabase thật (`eu-west-1`), thấy rằng **tuy hai lời gọi HTTP upstream có chồng lấn**
+(`354 ms` và `384 ms`), `DocumentAggregationService` lại **`await TryCacheUpsertAsync`
+tuần tự** bên trong vòng `foreach` trên `outcomes`, **tuần tự hóa hai vòng
+`ON CONFLICT DO UPDATE` liên vùng** sau khi fan-out đã xong.
+
+**Đã đổi.** Thu các task `TryCacheUpsertAsync` vào `cacheUpsertTasks` và `await` chúng
+**đồng thời** qua `Task.WhenAll(cacheUpsertTasks)` (giữ nguyên ngữ nghĩa cache
+read-after-write tất định trong khi vẫn chồng lấn hai lệnh ghi DB).
+
+**Vì sao quan trọng.** **Giảm một nửa** độ trễ ghi cache ở trạng thái ổn định khi cả hai
+nguồn đều hit — và nó được phát hiện **trực tiếp bằng cách kiểm tra waterfall OpenTelemetry
+của chính mình**, không phải bằng mock tổng hợp.
+
+---
+
+### I-8 · Bản fix defect — Toàn xanh ở local, chết ở production
+
+> **Đây là entry quan trọng nhất của cả giai đoạn hiện thực.**
+
+**AI sinh ra.** Mọi thứ tới thời điểm đó **đều xanh**: 73 test pass và endpoint demo đúng
+đối chiếu với các mock. Nhưng đối chiếu với **Supabase THẬT**, service vẫn **hỏng theo ba
+cách mà không test nào có thể thấy**:
+
+1. **`/health/ready` trả `503`**: health check giới hạn probe của nó ở mức **hardcode 2
+   giây**, nhưng một kết nối liên vùng lạnh cần TLS + tra cứu tenant Supavisor + SASL, và
+   **Npgsql không quan sát cancellation token một cách đáng tin trong lúc đang mở kết nối
+   vật lý**, nên cái giới hạn đó **bị phớt lờ** và probe chạy hết trọn **30 giây** connect
+   timeout.
+2. **Nhánh stale-cache của §I.4.3 chưa bao giờ chạy** — mọi nguồn lỗi đều báo `failed`,
+   **không bao giờ là `stale`**. Lệnh ghi cache chạy trên cancellation token **của
+   request**, mà token đó bị hủy ngay khoảnh khắc response được gửi, nên một lệnh ghi liên
+   vùng **luôn bị hủy giữa lúc bắt tay** và cache **vĩnh viễn rỗng**. Ngân sách ghi 1500 ms
+   của chính repository cũng **không thể** hoàn tất một kết nối lạnh.
+3. **`await Task.WhenAll(cacheUpsertTasks)` nằm trên đường đi của response**, nên một
+   database **nhận kết nối TCP rồi không bao giờ trả lời** đã **giữ toàn bộ lệnh đọc** cho
+   tới khi ngân sách request hết.
+
+**Đã đổi.** Thực thi ngân sách readiness bằng cách **đua** probe thay vì hủy nó, và làm nó
+cấu hình được (`HealthChecks:DatabaseTimeoutMs`, mặc định 5 giây). Tách lệnh ghi cache khỏi
+token của request (`CancellationToken.None`) và chia ngân sách 1500 ms duy nhất của
+repository thành ngân sách **đọc 1500 ms** trên đường response và ngân sách **ghi 8 giây**
+sau đó; nâng ghi audit lên 8 giây vì cùng lý do. Cấp cho việc xử lý cache một ngân sách
+**1 giây trên đường response**, quá đó thì phần đọc hoàn tất và phần ghi tự chạy nền. Thêm
+`NpgsqlConnectionHardening` để giữ một kết nối ấm (`Minimum Pool Size=1`,
+`Connection Idle Lifetime=300`, `Timeout=15`) **mà không ghi đè bất cứ gì người vận hành
+đã set**, cộng một `DatabaseWarmupService` mở một kết nối sau khi khởi động và **không bao
+giờ chặn boot**. **Đã kiểm chứng đối chiếu Supabase thật**: readiness `200`, và một nguồn
+lỗi giờ trả `stale` với đủ 7 tài liệu.
+
+**Vì sao quan trọng.** **Toàn bộ điểm chính của Scenario D là cư xử tốt khi một dependency
+cư xử tệ**, và cái tính năng chứng minh điều đó **đã chết ở production trong khi mọi test
+nói ngược lại**. Test không thể bắt được nó vì Testcontainers chạy PostgreSQL **cục bộ** và
+kết nối trong **dưới một milli giây**, nên ngân sách 1500 ms là **rộng rãi ở đó** và **phi
+lý** đối với một managed pooler liên vùng. **Bài học rút ra: một bộ test xanh chỉ mô tả cái
+môi trường mà bộ test đó đang chạy trong đó.** Vì vậy ba test thay thế trỏ database vào
+một **TCP listener hố đen** nhận kết nối rồi không bao giờ trả lời — một cổng đóng bị từ
+chối ngay lập tức và **sẽ chẳng chứng minh được gì**.
+
+---
+
+### I-9 · Bản fix defect — Một test không thể fail
+
+**AI sinh ra.** Trong lúc viết test hồi quy cho ngân sách readiness, bản đầu tiên trỏ
+connection string vào **một cổng đóng** (`127.0.0.1:59999`) và khẳng định readiness trả lời
+trong dưới 1,5 giây.
+
+**Đã đổi.** Thay cổng đóng bằng một `TcpListener` **hố đen** nhận kết nối rồi không bao giờ
+trả lời, và thêm một test thứ ba khẳng định rằng một ngân sách **rộng rãi 3 giây** cũng
+được tôn trọng (mà cái trần hardcode 2 giây cũ sẽ **fail**).
+
+**Vì sao quan trọng.** Test đó sẽ **xanh cả trước VÀ sau** bản fix: một cổng đóng bị từ
+chối ngay lập tức, nên nó **chẳng đo gì cả**. **Một test không thể fail còn tệ hơn là
+không có test, bởi nó báo cáo một sự an toàn mà nó chưa từng kiểm tra.** Nó được bắt bằng
+cách hỏi **"thay đổi gì ở production sẽ làm test này fail?"** trước khi tin nó.
+
+---
+
+### I-10 · Bản fix defect — `ContainsKey` trả lời một câu hỏi khác
+
+**AI sinh ra.** `NpgsqlConnectionHardening` dùng
+`NpgsqlConnectionStringBuilder.ContainsKey` để quyết định xem người vận hành đã set
+`Timeout` / `Minimum Pool Size` chưa, nên nó **chưa bao giờ áp dụng bất kỳ mặc định nào**.
+
+**Đã đổi.** Đọc các khóa đã được cấp từ một `DbConnectionStringBuilder` **thuần** dựng từ
+chuỗi thô.
+
+**Vì sao quan trọng.** `NpgsqlConnectionStringBuilder.ContainsKey` trả lời **"đây có phải
+một keyword tôi biết không"**, **không phải** "người vận hành có set nó không", nên nó
+`true` với **mọi** option của Npgsql. Unit test bắt được ngay lập tức — `MinPoolSize` trả
+về `0` — mà **đó chính là công dụng của một test được viết trước phần hiện thực**.
+
+---
+
+### I-11 · Task 8 — Cấu hình đọc háo hức, một defect production thật
+
+**AI sinh ra.** **Cả mười** test resilience fail **y như nhau** ở lần chạy đầu: service cứ
+gọi các container mock thật ở cổng 5101/5102 thay vì các stub WireMock mà test đã trỏ nó
+tới. `AddDocumentSources` đọc `Upstreams:*:BaseAddress` **háo hức, lúc đăng ký**, nên nó
+chụp lại đúng những gì `appsettings.json` nói và **phớt lờ mọi nguồn cấu hình thêm vào sau
+đó** — bao gồm cả nguồn của `WebApplicationFactory`.
+
+**Đã đổi.** Chuyển các lần đọc cấu hình **vào trong** các delegate cấu hình client để
+chúng phân giải từ `IServiceProvider` cho mỗi client (`BaseAddress(sp, …)`,
+`MinimumThroughput(sp)`), và bỏ tham số `IConfiguration` giờ đã vô dụng.
+
+**Vì sao quan trọng.** Cùng họ với I-5, và là **một defect production THẬT** chứ không phải
+một bất tiện của test: **bất kỳ lần triển khai nào đặt địa chỉ upstream qua biến môi trường
+hoặc một file config được mount — tức cách làm bình thường — sẽ bị âm thầm phớt lờ** để
+dùng mặc định đã nướng vào trong. **Phải có một test trỏ đi chỗ khác mới nhận ra được.**
+
+---
+
+### I-12 · Task 8 — Test flaky vì tranh chấp CPU, không phải vì bug sản phẩm
+
+**AI sinh ra.** Sau khi sửa cấu hình, chín trên mười test pass và
+`Repeated_failures_open_the_circuit_and_subsequent_calls_fail_fast` fail với collection
+`Sources` bị null — **nhưng pass ba trên ba lần khi chạy một mình**.
+
+**Đã đổi.** Set `parallelizeTestCollections: false` cho project integration test qua
+`xunit.runner.json`, và làm các vòng lặp breaker **bỏ qua** một response không-`200` thay
+vì cố parse nó.
+
+**Vì sao quan trọng.** Bốn integration test khẳng định về thời gian trôi qua — fan-out song
+song, ngân sách timeout, và hai ngân sách readiness. Khi chạy cùng các test class khác,
+tranh chấp CPU đẩy một upstream **cố ý khỏe mạnh** vượt quá timeout 2 giây mỗi lần thử, nên
+cả hai nguồn đều lỗi và endpoint **trả lời `503` một cách hoàn toàn đúng** với một body
+`ProblemDetails` không có `sources`. **Sản phẩm thì đúng và cái sai là bộ khung chạy test**;
+truy nó như một bug sản phẩm sẽ là công sức bỏ đi. **Khẳng định về độ trễ và chạy test song
+song không đi cùng nhau được.**
+
+---
+
+### I-13 · Task 9 — Tài liệu không sống nổi qua việc bị chạy thật
+
+**AI sinh ra.** Bản nháp đầu tiên của mục "Seeing it degrade" trong README được viết từ **ý
+định thiết kế**: làm hỏng một nguồn, rồi làm nó chậm, và quan sát một timeout ~5 giây. Chạy
+các lệnh đã ghi theo đúng thứ tự thì ra **0,04 giây** và lý do **`CircuitOpen`** thay vào
+đó, còn bước `garbage` báo nguồn là **`ok`** chứ không phải `InvalidPayload`.
+
+**Đã đổi.** Viết lại cả mục **đối chiếu với đầu ra đo được**: thêm bước circuit-breaker như
+**một tính năng để quan sát** thay vì một sự cố tình cờ, thêm **lệnh chờ 16 giây** để các
+breaker đóng lại trước khi đo một timeout (**5,9 giây, không phải 5**), và sửa lại mô tả
+`garbage` — mock trả về JSON **đúng cú pháp nhưng thiếu tiêu đề**, nên bản ghi bị bỏ qua và
+nguồn **vẫn `ok`**, mà đó là **giả định #7 đang hoạt động** chứ không phải một payload
+không hợp lệ.
+
+**Vì sao quan trọng.** **Tài liệu không sống nổi qua việc bị chạy thật thì còn tệ hơn là
+không có tài liệu**: một người review đi theo nó sẽ kết luận rằng service bị hỏng, hoặc
+rằng **tác giả chưa bao giờ chạy chính hướng dẫn của mình**. Hai lỗi có **cùng một gốc**:
+ghi lại điều mà **thiết kế nói** thay vì điều mà **hệ thống làm**. Giờ **mọi con số trong
+mục đó đều là con số đã được đo**.
+
+---
+
+### I-14 · Review cuối — Một Critical mà 96 test không thấy
+
+> **Đây là entry biện minh cho toàn bộ quy trình.**
+
+**AI sinh ra.** Một người review **với ngữ cảnh mới** trên toàn bộ branch tìm ra một defect
+**Critical** mà **cả phần hiện thực lẫn 96 test đang pass đều không bắt được**. Lệnh đọc
+cache chạy **SAU** fan-out — khoảng một giây trước ngân sách 6 giây của toàn request, mỗi
+khi một nguồn chạm timeout 5 giây của chính nó. Đối chiếu với một database nhận kết nối rồi
+không bao giờ trả lời, `OperationCanceledException` của cache **lọt ra khỏi
+`GetDocumentsAsync`** và **ném đi những tài liệu đã hoàn thành của nguồn khỏe mạnh**: thành
+một `503` **rỗng không có gì trong đó**. Người review **kiểm chứng nó bằng một harness**
+chứ không phải bằng suy luận.
+
+**Đã đổi.** Làm cho lệnh đọc cache **về mặt cấu trúc không có khả năng throw** — nó bắt mọi
+thứ, **kể cả cancellation**, và báo cáo một kết cục thay vì throw. Thêm test còn thiếu
+(nguồn lỗi + database treo) mà chính sự thiếu nó đã để defect này ship trong trạng thái
+xanh. Người review còn tìm thấy: `openapi.json` đã commit **đánh dấu `required` cho các
+thành viên bị bỏ-khi-null** (nên một client được generate sẽ **từ chối chính đường đi thuận
+lợi**), metric `cache.lookup` **ghi nhận một hit từ một lần tra đã bị bỏ dở**, nhánh `503`
+do timeout **không ghi metric và không ghi dòng audit nào**, `Parallel_fan_out` **fail mọi
+lần chạy một mình**, và hai trong ba thiết lập connection-hardening **chỉ lặp lại đúng mặc
+định của Npgsql** — làm cho test đó thành **một test nữa không thể fail**. **Cả bảy đều
+được sửa trong một lượt, mỗi cái với một test được xem thấy đỏ trước.**
+
+**Vì sao quan trọng.** Defect này là **CHÍNH XÁC cái chế độ lỗi mà `UpstreamResult<T>` tồn
+tại để ngăn** — được tái tạo lại **qua đường cancellation**, trong **đúng cái môi trường
+(managed Postgres bị treo) mà bản fix trước được viết ra để xử lý**, bởi **chính người kỹ
+sư vừa viết bản fix đó**. **Tự review không thể tìm ra nó: cùng tác giả, cùng điểm mù.**
+Bài học của I-8 là một bộ test xanh chỉ mô tả cái môi trường nó chạy trong đó; bài học ở
+đây **hẹp hơn và sắc hơn** — **một nguyên tắc thiết kế chỉ đúng ở nơi có ai đó đi kiểm tra
+rằng nó đúng, và chính người viết ra nó là người tệ nhất để đi kiểm.**
+
+---
+
+### I-15 · Sau review — Hai "Minor" mà hậu quả không minor
+
+**AI sinh ra.** Hai phát hiện mà review toàn branch **xếp loại Minor**, nhưng được xử lý vì
+**hậu quả của chúng không minor**:
+
+1. `SalesDocumentNormalizer` nhân kilobyte của upstream với 1024 **không kiểm tra tràn**,
+   nên một giá trị phi lý sẽ **quấn vòng** và API trao cho client một số byte **ÂM**.
+2. Response body của upstream được đọc **không giới hạn kích thước** và — vì
+   `HttpCompletionOption.ResponseHeadersRead` nghĩa là pipeline Polly **đã trả về rồi** —
+   **nằm hoàn toàn ngoài ngân sách của upstream**.
+
+**Đã đổi.** Kilobyte lớn hơn `long.MaxValue / 1024` giờ báo kích thước **không biết** và
+tài liệu **vẫn được trả về**. Phần đọc body được thêm giới hạn **4 MiB thực thi TRONG LÚC
+ĐỌC** (một response chunked **không khai báo `Content-Length`**) và ngân sách **2 giây**
+riêng của nó, với body quá lớn báo là `InvalidPayload` và body nhỏ giọt báo là `Timeout`.
+
+**Vì sao quan trọng.** **Việc viết test cho giới hạn body cho thấy phát hiện đó đã bị mô tả
+nhẹ đi**: không có giới hạn, phép đọc **không chỉ phình bộ nhớ — nó KHÔNG BAO GIỜ TRẢ VỀ**
+— tiến trình test phải **bị giết sau 70 giây**. §I.2 nguyên tắc 3 nói upstream là không
+đáng tin, mà response body lại là **chỗ duy nhất trong codebase nơi chúng được tin**. Một
+kích thước âm cũng tệ hơn là không có kích thước, bởi vì **client sẽ tin nó**.
+
+---
+---
+
+# PHẦN VI — BẢN GHI PROMPT
+
+Những prompt **thực sự định hình** bài nộp này, theo thứ tự, kèm những gì nhận lại được và
+đã làm gì với chúng. Prompt được viết bằng **tiếng Việt** trong một session Claude Code;
+bản gốc tiếng Anh diễn giải lại **ý định** của từng prompt.
+
+Khuôn mẫu mà chúng tuân theo là **có chủ ý** và chính là chiến lược được mô tả ở §IV.7.1:
+**không bao giờ hỏi code trước.** Mỗi giai đoạn yêu cầu mô hình **trích xuất**, **chấm
+điểm**, **tấn công**, hoặc **biện giải** — và chỉ sau đó mới **sản xuất**. Công việc được
+sinh ra trước khi bài toán được chốt là công việc sẽ phải ném đi.
+
+---
+
+## Giai đoạn 1 — Trích xuất, không diễn giải
+
+> Đọc đề bài assessment và rút ra các yêu cầu. **Đừng bắt đầu thiết kế.**
+
+Sinh ra một bản kiểm kê yêu cầu, và — **quan trọng hơn** — **tách biệt** tiêu chí nghiệm thu
+*tường minh* của từng scenario khỏi các yêu cầu *xuyên suốt* trong "The Challenge Structure"
+và "Deliverables" — **nhóm thứ hai chính là chỗ mà yêu cầu database-bền-vững đang ẩn mình**.
+Giữ việc trích xuất tách khỏi việc thiết kế chính là thứ làm cho việc tìm ra nó **trở nên
+khả thi**.
+
+## Giai đoạn 2 — Chấm điểm các phương án theo rubric, kèm một khuyến nghị
+
+> Phân tích cả bốn scenario và đánh giá cái nào phù hợp với trình độ của tôi. **Đưa lý lẽ,
+> không đưa phán quyết.**
+
+Sinh ra bản so sánh dẫn tới Scenario D: độ phức tạp hiện thực, nguy cơ phình phạm vi, và
+mỗi scenario để lại bao nhiêu chất liệu cho tài liệu thiết kế hệ thống. Xem nhật ký review
+**D-1**.
+
+## Giai đoạn 3 — Tấn công chính lựa chọn của mình
+
+> Đọc lại Phần 2 **theo kiểu đối kháng**. Scenario D **không thỏa mãn được điều gì về mặt
+> cấu tạo?**
+
+**Prompt giá trị nhất của cả quy trình.** Sinh ra phát hiện rằng một database bền vững là
+**bắt buộc** cho bài nộp backend trong khi Scenario D **không lưu gì của riêng nó**. Xem
+nhật ký review **D-2**.
+
+## Giai đoạn 4 — Lập kế hoạch dựa trên một ràng buộc thật
+
+> Tôi có sáu ngày, và đây là ba deliverable. **Thứ tự công việc là gì, và cái gì bị cắt đầu
+> tiên nếu tôi bị trễ?**
+
+Sinh ra kế hoạch theo từng ngày, danh sách **"không được cắt"** (fan-out song song, lỗi một
+phần, test, database, tài liệu thiết kế, tường thuật AI, video — **mỗi cái map tới một dòng
+trong khung đánh giá**), và thứ tự cắt cho mọi thứ còn lại. Danh sách cắt đó **trở thành §9
+Non-Goals** trong tài liệu thiết kế: **một lựa chọn được nêu kèm lý do thì đọc ra là phán
+đoán, trong khi cùng khoảng trống đó mà im lặng thì đọc ra là sơ suất.**
+
+## Giai đoạn 5 — Tìm chế độ lỗi trong chính thiết kế của mình
+
+> Đây là thiết kế fan-out. **Tìm bug.**
+
+Sinh ra phát hiện `Task.WhenAll`. Xem nhật ký review **D-3** — nó làm đổi **chính kiểu dữ
+liệu cốt lõi** (`UpstreamResult<T>`) chứ không phải một dòng code.
+
+## Giai đoạn 6 — Biện giải mọi công nghệ, kể cả những cái bị loại
+
+> Với **mỗi** công nghệ, hãy nêu phương án anh **đã loại** và **vì sao**.
+
+Sinh ra bảng công nghệ ở §I.6. Việc **bắt buộc** phải nêu một phương án bị loại cho **từng
+dòng** chính là thứ làm lộ ra vấn đề licence của FluentAssertions (**D-4**) và câu hỏi
+integration test nên trỏ vào đâu (**D-6**) — **không cái nào trong hai cái đó sẽ xuất hiện
+từ một prompt chỉ hỏi "nên dùng gì"**.
+
+## Giai đoạn 7 — Tài liệu thiết kế, rồi plan, rồi code
+
+> Viết tài liệu thiết kế hệ thống. **Rồi** một implementation plan với các test được viết
+> rõ ra theo từng task.
+
+**Trình tự có chủ ý.** Viết thiết kế trước plan, và plan trước code, nghĩa là mô hình hiện
+thực **dựa trên một đặc tả mà TÔI sở hữu** thay vì tự bịa ra một cái — và đó là thứ cho
+phép **từng task trong plan được kiểm chứng độc lập**, thay vì phải review một đống code
+sinh ra **mờ đục như một khối**.
+
+## Giai đoạn 8 — Hiện thực
+
+Prompt được thêm vào khi Task 1–8 được thực thi, **mỗi cái đi kèm bước kiểm chứng** đã kiểm
+tra đầu ra của nó.
+
+---
+---
+
+# PHẦN VII — SỔ PHÁN QUYẾT HIỆN THỰC
+
+Bản ghi theo từng task được giữ **trong lúc** plan được thực thi: lần quét sơ bộ tìm xung
+đột giữa các task, **mọi phán quyết** được đưa ra ở những chỗ plan và spec bất đồng — mỗi
+cái kèm lý lẽ và **giá phải trả nếu nó sai** — cùng với lệnh test và kết quả đã đóng từng
+task.
+
+Nó được đưa vào vì **một người review nên thấy được những quyết định đã đưa ra thay cho
+mình, không chỉ thấy đoạn code đi ra**.
+
+> **Ghi chú của người dịch:** phần này giữ nguyên các chuỗi output test bằng tiếng Anh, vì
+> chúng là **đầu ra máy đã ghi lại** — dịch chúng sẽ làm mất tính bằng chứng.
+
+---
+
+## VII.1. Quét sơ bộ các interface
+
+| Bên sinh ra → Bên tiêu thụ | Interface / Hợp đồng | Phát hiện & Phán quyết |
+|---|---|---|
+| Task 1 → Task 3, 4, 5, 6, 7 | `Vin`, `VinError`, `SourceSystem`, `DocumentType`, `VehicleDocument`, `UpstreamResult<T>`, `UpstreamFailure`, `UpstreamFailureReason` | Khớp sạch trên mọi task và spec §I.4.2, §I.5.2. |
+| Task 2 → Task 3, 5 | Schema của `MockSalesApi` (`:5101`) & `MockServiceApi` (`:5102`) + `/admin/chaos` | Khớp sạch với bảng spec §I.5.3. |
+| Task 4 ↔ Task 5, 6, 7 | `IDocumentCacheRepository` (Task 6) và `IAggregationMetrics` (Task 7) được `DocumentAggregationService` (Task 4) và DI host (Task 5) tiêu thụ | **Phán quyết:** Định nghĩa `IDocumentCacheRepository` (`CachedSourceDocuments`) và `IAggregationMetrics` trong `DocumentViewer.Application` ngay ở Task 4, dùng **đúng signature của Task 6/7**, và đăng ký các mặc định no-op ở Task 5 (`TryAddSingleton`) cho tới khi Task 6 & 7 thay thế chúng — **vì sao:** `Application` phải compile được ở Task 4 và `Api` phải chạy được end-to-end ở Task 5 — **giá nếu sai:** bằng không, signature giống hệt Task 6 & 7. |
+| Task 4 → Task 5 | Biểu diễn JSON của `SourceStatus` trong `DocumentsResponse` | **Phán quyết:** Chú thích các thành viên enum `SourceStatus` bằng `[JsonStringEnumMemberName("ok" / "stale" / "failed")]` trong khi giữ `JsonStringEnumConverter` PascalCase cho `SourceSystem`, `DocumentType`, và `UpstreamFailureReason` — **vì sao:** khớp **nguyên văn** ví dụ JSON ở spec §I.4.3 & §I.5.2 — **giá nếu sai:** một lần điều chỉnh attribute không đáng kể. |
+| Spec §8.4 ↔ Task 6 & 7 | Kiểu cột `search_audit.correlation_id` (`uuid` trong sơ đồ §8.4 so với `string CorrelationId` ở Task 6 và `X-Correlation-Id` bất kỳ / `TraceId` W3C 32-hex ở §7.1 & Task 7) | **Phán quyết:** Dùng `varchar(128)` cho `search_audit.correlation_id` thay vì `uuid` của Postgres — **vì sao:** các header `X-Correlation-Id` từ ngoài vào và giá trị `TraceId` W3C 32 ký tự **không phải UUID theo RFC 4122** và sẽ **fail khi insert** vào cột `uuid` — **giá nếu sai:** khoảng 100 byte mỗi dòng audit, so với việc ghi audit **bị vỡ** khi có correlation ID tùy biến. |
+
+---
+
+## VII.2. Các phán quyết và kết quả theo từng task
+
+**Task 1 · Phán quyết.** Đoạn `VinTests` trong plan có **12 case** trong khi **tuyên bố là
+13** và **bỏ sót nhánh số-dư-10 (`'X'`) của ISO 3779**; đã thêm `1M8GDM9AXKP042788` làm
+case thứ 13 — **vì sao:** nó thực thi nhánh `mod 11 == 10` và khớp với kỳ vọng 13 test —
+**giá nếu sai:** không gì cả, đây là một VIN ISO 3779 hợp lệ.
+
+**Task 1 · Hoàn thành** (commit `1fed2a3..403f43d`, test: `dotnet test tests/DocumentViewer.UnitTests` → `Passed! Failed: 0, Passed: 13, Total: 13, Duration: 31 ms`)
+
+**Task 2 · Hoàn thành** (commit `403f43d..3c99371`, test: `dotnet test KeyloopDocumentViewer.sln` → `No test is available in …DocumentViewer.IntegrationTests.dll` — project integration test lúc đó **chưa có test nào**)
+
+**Task 3 · Hoàn thành** (commit `3c99371..a3b0c7f`, test: `dotnet test tests/DocumentViewer.UnitTests` → `Passed! Failed: 0, Passed: 36, Total: 36, Duration: 168 ms`)
+
+**Task 4 · Hoàn thành** (commit `a3b0c7f..84406b1`, test: `dotnet test tests/DocumentViewer.UnitTests` → `Passed! Failed: 0, Passed: 47, Total: 47, Duration: 501 ms`)
+
+**Task 5 · Hoàn thành** (commit `84406b1..717e717`, test: `dotnet test KeyloopDocumentViewer.sln` → `Passed! Failed: 0, Passed: 9, Total: 9, Duration: 1 s`)
+
+**Task 6 · Hoàn thành** (commit `717e717..f9086e0`, test: `dotnet test … --filter FullyQualifiedName~Persistence --no-build` → `Passed! Failed: 0, Passed: 8, Total: 8, Duration: 3 s`)
+
+**Phán quyết (giữa Task 6 và 7).** Tiếp tục commit lên `main` thay vì cắt một branch —
+**vì sao:** cả 8 commit trước của plan này **đã nằm trên `main`**, đây là một repo bài nộp
+**một tác giả**, và Task 9 kiểm chứng từ **một clone sạch của branch mặc định** — **giá nếu
+sai:** một lần rebase sang branch, **không đổi code**.
+
+**Task 7 · Hoàn thành** (commit `f9086e0..358567b`, test: `dotnet test … --filter FullyQualifiedName~ObservabilityTests` → `Passed! Failed: 0, Passed: 9`)
+
+**Bản fix defect · Phán quyết 1.** Ngân sách readiness được thực thi bằng cách **đua** probe
+thay vì **hủy** nó, và được làm cấu hình được (mặc định 5 giây) — **vì sao:** Npgsql **không
+quan sát một `CancellationToken` một cách đáng tin trong lúc đang mở kết nối vật lý**, nên
+một ngân sách 200 ms **bị phớt lờ** và readiness chạy hết trọn **30 giây** connect timeout
+đối với Supabase thật — **giá nếu sai:** một task probe bị bỏ dở cho mỗi lần poll readiness
+bị timeout, mà nó **được quan sát và bị loại bỏ**.
+
+**Bản fix defect · Phán quyết 2.** Lệnh ghi cache dùng `CancellationToken.None` thay vì
+token của request, với ngân sách ghi 8 giây ở repository và ngân sách 1 giây trên đường
+response — **vì sao:** token của request **bị hủy khi response được gửi**, nên các lệnh ghi
+liên vùng **luôn bị hủy giữa lúc bắt tay** và cache **vĩnh viễn rỗng**, làm cho nhánh stale
+fallback ở spec §4.3 **thành code chết** — **giá nếu sai:** một lệnh ghi cache có thể sống
+lâu hơn request của nó tới 8 giây và **client không hủy được nó**.
+
+**Bản fix defect · Hoàn thành** (commit `358567b..a4985d7`, test: `dotnet test KeyloopDocumentViewer.sln` → `Passed! 56 unit + 29 integration = 85, Failed: 0`)
+
+**Task 8 · Phán quyết 1.** Sửa `AddDocumentSources` để phân giải cấu hình upstream **lười
+từ `IServiceProvider`** thay vì chụp `IConfiguration` lúc đăng ký, và bỏ tham số
+`IConfiguration` của nó — **vì sao:** lần đọc háo hức **phớt lờ mọi nguồn cấu hình thêm vào
+sau khi đăng ký**, nên các test gọi vào **container mock thật** và **bất kỳ lần triển khai
+nào đặt địa chỉ upstream qua biến môi trường sẽ bị âm thầm phớt lờ** — **giá nếu sai:** một
+lần tra `IConfiguration` thêm cho mỗi lần tạo `HttpClient`.
+
+**Task 8 · Phán quyết 2.** Tắt parallel test collection cho project integration test —
+**vì sao:** bốn test khẳng định về thời gian trôi qua và tranh chấp CPU từ các class song
+song đã **đẩy một upstream khỏe mạnh vượt quá timeout 2 giây mỗi lần thử**, tạo ra một
+`503` **hoàn toàn đúng** mà test **không parse được** — **giá nếu sai:** bộ integration
+chạy ~2 phút 11 thay vì ~1 phút 44.
+
+**Task 8 · Hoàn thành** (commit `a4985d7..9cdb6a3`, test: `dotnet test KeyloopDocumentViewer.sln` → `Passed! 56 unit + 39 integration = 95, Failed: 0`)
+
+**Task 9 · Phán quyết 1.** Readiness báo `Healthy` khi **hoàn toàn không cấu hình**
+database, và chỉ báo `Unhealthy` khi **đã cấu hình mà không với tới được** — **vì sao:**
+chạy không cache và audit là một **cấu hình được hỗ trợ** và service vẫn trả lời truy vấn
+tài liệu, nên định nghĩa "tôi làm được việc của tôi" ở spec §7.4 được áp dụng; nếu không,
+trải nghiệm clone-sạch sẽ **mở ra bằng một `503`** — **giá nếu sai:** một người vận hành
+quên cấu hình database sẽ thấy một service khỏe mạnh với persistence bị tắt trong im lặng,
+mà **chính response của health check nói rõ điều đó**.
+
+**Task 9 · Phán quyết 2.** Deliverable video được **hoãn theo yêu cầu tường minh của người
+dùng** — **vì sao:** người dùng yêu cầu hoàn thành công việc của hôm đó **trừ video** —
+**giá nếu sai:** một trong ba artefact bắt buộc của bài nộp **còn treo**; nó là **hạng mục
+duy nhất còn lại**.
+
+**Task 9 · Hoàn thành** (commit `9cdb6a3..bea60ed`, test: `dotnet test` từ **một clone sạch
+không có database và không `docker compose up`** → `Passed! 56 unit + 40 integration = 96, Failed: 0`)
+
+---
+
+## VII.3. Review cuối
+
+**Review cuối:** một người review **với ngữ cảnh mới** (Opus, effort cao) trên
+`review-f9086e0..bea60ed.diff` — **1 Critical, 7 Important, 13 Minor.**
+
+**Phán quyết · Nâng hạng minor #8** (vệ sinh bài nộp) lên **Important** — **vì sao:**
+README **link tới workspace `.superpowers/sdd/` vốn bị git-ignore**, tức là một **link chết
+trong mọi bản clone**, và `TODO.md`/`env.sh` là **scaffolding nội bộ đã bị commit** —
+**giá nếu sai:** không gì cả; sổ phán quyết được **công bố** thành
+`docs/ai-collaboration/implementation-ledger.md` và hai file kia **ở lại trên đĩa nhưng
+không được track**.
+
+**Phán quyết · Nâng hạng minor #4** (các stub observability dùng tên trường mà normaliser
+**không đọc**) lên **Important** — **vì sao:** **cả chín test trong class đó đang chạy trên
+các response ZERO tài liệu và vẫn pass**, nên cả nhóm **không ghim được điều nó tuyên bố** —
+**giá nếu sai:** một test guard thêm vào.
+
+| Mã | Đã sửa gì | Bằng chứng |
+|---|---|---|
+| **C1** | Một database bị treo **ném đi tài liệu của một nguồn khỏe mạnh**, biến `200`-partial thành `503`-rỗng | `A_hung_database_cannot_discard_a_healthy_source_when_the_request_budget_expires` ĐỎ→XANH, suite 101/101 |
+| **I1** | `Parallel_fan_out` fail 3/3 khi chạy một mình; `--filter Resilience` flaky 1/4 | Thêm một request **warm-up trước khi bấm đồng hồ** + các vòng breaker **fail ồn ào**; kiểm chứng 3/3 và 4/4 xanh, suite 101/101 |
+| **I2** | `openapi.json` đã commit **đánh dấu `required`** cho các thành viên bị-bỏ-khi-null, nên một client được generate **từ chối đường đi thuận lợi** | `OpenApiContractTests` ĐỎ→XANH, suite 101/101 |
+| **I3** | Tài liệu thiết kế §8.4 **vẫn vẽ `correlation_id` là `uuid`** trong khi code dùng `varchar(128)` | Đã sửa tài liệu |
+| **I4** | `requests.http` **trỏ vào cổng 5000** trong khi README chạy 5080 | `requests.http` và `launchSettings` được đồng bộ về 5080 |
+| **I5** | `cache.lookup` **ghi nhận một hit từ một lần tra đã bị bỏ dở**, sau khi response đã đi ra mà không có nó | `A_cache_lookup_that_exceeds_its_budget_is_recorded_as_a_timeout_not_a_hit` ĐỎ→XANH, suite 101/101 |
+| **I6** | Timeout toàn request **không ghi metric và không ghi dòng audit nào**, làm mù SLO khả dụng ở §7.5 | `TimeoutAccountingTests` ĐỎ→XANH, suite 101/101 |
+| **I7** | Hai trong ba thiết lập hardening **chỉ khớp đúng mặc định của Npgsql**, nên test **vẫn pass dù `Harden` trả về nguyên đầu vào** | `Pins_every_setting_it_depends_on_instead_of_inheriting_an_Npgsql_default` giờ **khẳng định việc phát ra giá trị**; **kiểm chứng bằng đột biến (mutation)**: trả về nguyên đầu vào làm **fail 2 test**, suite 101/101 |
+
+### VII.3.1 Các minor được hoãn
+
+Bảy minor được ghi lại và **cố ý không sửa** ở lượt đó:
+
+1. Health check gọi `Task.Delay(budget, cancellationToken)` báo *"did not answer within
+   5000ms"* khi **người gọi hủy**, đó là **một thông báo sai**.
+2. Lệnh đọc cache cho các nguồn lỗi được `await` **tuần tự**, nên hai nguồn lỗi có thể tốn
+   **2 giây** trên đường đi của response.
+3. `Task.Delay` không có token để lại **một timer 1 giây cho mỗi thao tác cache** kể cả khi
+   thao tác đó thắng cuộc đua.
+4. `NullAggregationMetrics` là **code chết** vì `AddDocumentSources` **luôn** thay thế
+   `IAggregationMetrics`.
+5. Không có OTLP endpoint, console exporter **xen trace và metric lẫn với JSON của Serilog**
+   trên cùng một stdout.
+6. `fileSizeKb * 1024` của `SalesDocumentNormalizer` **không kiểm tra tràn**, nên một giá
+   trị upstream phi lý tạo ra `sizeBytes` **âm**. → **Đã sửa sau đó, xem bên dưới.**
+7. Response body của upstream được đọc **không giới hạn kích thước** và **ngoài ngân sách
+   Polly** (`HttpCompletionOption.ResponseHeadersRead`). → **Đã sửa sau đó, xem bên dưới.**
+
+### VII.3.2 Sau review — minor #6 và #7
+
+**Phán quyết.** Xử lý các minor được hoãn **#6 và #7 theo yêu cầu tường minh của người
+dùng**, mỗi cái **đỏ-sang-xanh** — **vì sao:** người dùng yêu cầu cụ thể hai cái đó, và
+**việc viết test cho #7 cho thấy phát hiện đó đã bị mô tả nhẹ đi** (một phép đọc body không
+giới hạn **không chỉ phình bộ nhớ, nó không bao giờ trả về**; tiến trình test phải **bị giết
+sau 70 giây**) — **giá nếu sai:** một body upstream lớn hơn 4 MiB hoặc chậm hơn 2 giây sẽ
+**bị báo là một thất bại của nguồn** thay vì được đọc.
+
+- **Đã sửa minor #6** (kilobyte × 1024 không kiểm tra tràn tạo ra `sizeBytes` âm) —
+  `Reports_a_size_it_cannot_represent_as_unknown_rather_than_a_negative_number` ĐỎ→XANH,
+  suite **108/108**.
+- **Đã sửa minor #7** (đọc body upstream không giới hạn kích thước và ngoài ngân sách
+  Polly) — `Reports_a_body_that_never_stops_arriving` /
+  `Reports_a_body_that_trickles_past_its_budget` **ĐỎ (treo, bị giết ở 70 giây)** →XANH,
+  suite **108/108**.

@@ -22,6 +22,10 @@ the reasoning · [Code Guide](docs/code-guide.md) for a ten-minute tour of the s
 budget and limit, and extension recipes · the
 [AI Collaboration Narrative](#ai-collaboration-narrative) below.
 
+A consolidated Vietnamese translation of those three documents is in
+[`docs/tai-lieu-tieng-viet.md`](docs/tai-lieu-tieng-viet.md). The English documents above
+are authoritative; the translation is a reading aid.
+
 ---
 
 ## Quickstart

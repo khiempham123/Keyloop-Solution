@@ -25,7 +25,7 @@ liền mạch:
 
 | | |
 |---|---|
-| **Tác giả** | _TODO: điền tên anh_ |
+| **Tác giả** | Pham Gia Khiem |
 | **Ngày** | 2026-10-29, sửa 2026-10-31, bản dịch 2026-11-01 |
 | **Phiên bản** | 2.0 (đã đối chiếu với phần hiện thực) |
 | **Tầng đã hiện thực** | Backend (RESTful API + database bền vững) |

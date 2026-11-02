@@ -430,7 +430,7 @@ thrown away.
 ### What the AI got wrong
 
 A representative selection; the full list is in
-[`review-log.md`](docs/ai-collaboration/review-log.md) (D-1…D-7 design, I-1…I-12
+[`review-log.md`](docs/ai-collaboration/review-log.md) (D-1…D-7 design, I-1…I-15
 implementation).
 
 | # | What the AI produced | What was changed | Why it mattered |

@@ -3,7 +3,32 @@
 .env.*
 *.env
 .env.local
+
+# Local and environment-specific app configuration. The lower-case pattern alone
+# does not cover appsettings.Local.json or appsettings.Development.Local.json,
+# because gitignore patterns are case-sensitive even on a case-insensitive
+# filesystem — so each casing is listed. appsettings.Production.json is excluded
+# because that is where a real connection string lands by convention.
+appsettings.local.json
+appsettings.Local.json
 appsettings.*.local.json
+appsettings.*.Local.json
+appsettings.Production.json
+
+# Credential material of any kind
+secrets.json
+*.secrets.json
+*.pem
+*.key
+*.pfx
+*.p12
+*.cer
+*.crt
+
+# Log files. This service treats a VIN as personal data: a log file captured
+# during a demo and left in the working tree is the easiest route for one to
+# leave this machine. [Ll]og/ below covers directories, not loose files.
+*.log
 
 # Superpowers scratch workspace & internal notes
 .superpowers/
@@ -41,7 +66,9 @@ artifacts/
 .idea/
 *.swp
 
-# Internal working notes and author-local toolchain shim — not part of the submission
+# Internal working notes, author-local toolchain shim and the video narration
+# script — none of these are part of the submission.
+# (docs/superpowers/RESUME.md is already covered above.)
 TODO.md
-docs/superpowers/RESUME.md
 env.sh
+FLOW-NARRATION.md

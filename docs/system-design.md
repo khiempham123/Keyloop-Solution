@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| **Author** | _TODO: your name_ |
+| **Author** | Pham Gia Khiem |
 | **Date** | 2026-10-29, revised 2026-10-31 |
 | **Version** | 2.0 (reconciled with the implementation) |
 | **Implemented layer** | Backend (RESTful API + persistent database) |

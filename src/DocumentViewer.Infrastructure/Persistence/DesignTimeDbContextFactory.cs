@@ -8,8 +8,8 @@ public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<Doc
     public DocumentViewerDbContext CreateDbContext(string[] args)
     {
         var connectionString = FirstNonEmpty(
-            Environment.GetEnvironmentVariable("ConnectionStrings__Default"),
             Environment.GetEnvironmentVariable("ConnectionStrings__Migrations"),
+            Environment.GetEnvironmentVariable("ConnectionStrings__Default"),
             "Host=localhost;Port=5432;Database=document_viewer;Username=postgres;Password=postgres");
 
         var optionsBuilder = new DbContextOptionsBuilder<DocumentViewerDbContext>();
